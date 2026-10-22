@@ -67,6 +67,29 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
+  /api/v1/auth/activate:
+    post:
+      tags: [Authentication]
+      summary: Activate an invited employee account
+      operationId: activateAccount
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActivateAccountRequest'
+      responses:
+        '200':
+          description: Account activated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivateAccountResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
   /api/v1/auth/refresh:
     post:
       tags: [Authentication]
@@ -289,7 +312,8 @@ paths:
       tags: [Employees]
       summary: Create an employee
       operationId: createEmployee
-      x-required-roles: [admin, hr]
+      x-required-permission: employee:create
+      description: HR may create employee-role accounts. Elevated role assignment requires the user:role:assign permission and is restricted to administrators by the service.
       security:
         - bearerAuth: []
       requestBody:
@@ -304,7 +328,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/EmployeeResponse'
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        $ref: '#/components/schemas/EmployeeAccountCreationData'
         '400':
           $ref: '#/components/responses/BadRequest'
         '401':
@@ -729,6 +758,37 @@ components:
           maxLength: 128
           description: Must contain at least one uppercase letter, lowercase letter, and number.
 
+    ActivateAccountRequest:
+      type: object
+      additionalProperties: false
+      required: [invitationToken, newPassword]
+      properties:
+        invitationToken:
+          type: string
+          minLength: 32
+          maxLength: 128
+        newPassword:
+          type: string
+          minLength: 12
+          maxLength: 128
+          description: Must contain at least one uppercase letter, lowercase letter, and number.
+
+    ActivateAccountResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessResponse'
+        - type: object
+          properties:
+            data:
+              type: object
+              required: [activated, loginId]
+              properties:
+                activated:
+                  type: boolean
+                  enum: [true]
+                loginId:
+                  type: string
+                  format: email
+
     AuthData:
       type: object
       required: [accessToken, refreshToken, sessionId, tokenType, expiresIn]
@@ -970,6 +1030,37 @@ components:
           type: number
           minimum: 0
           maximum: 999999999
+        role:
+          type: string
+          enum: [admin, hr, manager, employee]
+          default: employee
+          description: Only an administrator may assign hr, manager, or admin. HR may create employee accounts.
+
+    AccountInvitation:
+      type: object
+      required: [loginId, role, invitationToken, invitationExpiresAt]
+      properties:
+        loginId:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [admin, hr, manager, employee]
+        invitationToken:
+          type: string
+          description: One-time activation token. Store securely and never log it.
+        invitationExpiresAt:
+          type: string
+          format: date-time
+
+    EmployeeAccountCreationData:
+      type: object
+      required: [employee, account]
+      properties:
+        employee:
+          $ref: '#/components/schemas/Employee'
+        account:
+          $ref: '#/components/schemas/AccountInvitation'
 
     UpdateEmployeeRequest:
       type: object

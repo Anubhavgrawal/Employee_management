@@ -1,4 +1,4 @@
-import { MigrationInterface, QueryRunner } from "typeorm";
+import { type MigrationInterface, type QueryRunner } from "typeorm";
 
 export class AddAuditMetadata1730000002000 implements MigrationInterface {
   name = "AddAuditMetadata1730000002000";
