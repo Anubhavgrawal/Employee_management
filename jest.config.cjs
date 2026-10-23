@@ -1,9 +1,14 @@
+
 /** @type {import('jest').Config} */
 module.exports = {
   preset: "ts-jest",
   testEnvironment: "node",
   roots: ["<rootDir>/tests"],
-  testMatch: ["**/middlewares/auth/*.test.ts", "**/auth.test.ts"],
+  testMatch: [
+    "**/integration/*.test.ts",
+    "**/auth.test.ts",
+  ],
   moduleFileExtensions: ["ts", "js", "json"],
+  setupFiles: ["<rootDir>/tests/config/jest.setup.ts"],
   clearMocks: true,
 };

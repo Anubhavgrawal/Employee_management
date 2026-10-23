@@ -7,6 +7,7 @@
     "build": "tsc",
     "start": "node dist/src/server.js",
     "migration:run": "typeorm-ts-node-commonjs migration:run -d src/config/database.ts",
+    "migration:test": "typeorm-ts-node-commonjs migration:run -d tests/config/database.ts",
     "migration:revert": "typeorm-ts-node-commonjs migration:revert -d src/config/database.ts",
     "migration:generate": "typeorm-ts-node-commonjs migration:generate src/migrations/SchemaUpdate -d src/config/database.ts",
     "seed": "tsx src/seeds/seed.ts",
