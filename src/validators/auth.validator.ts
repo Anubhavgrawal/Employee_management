@@ -24,3 +24,15 @@ export const changePasswordSchema = z
       .regex(/[0-9]/, "Include a number"),
   })
   .strict();
+export const activateAccountSchema = z
+  .object({
+    invitationToken: z.string().min(32).max(128),
+    newPassword: z
+      .string()
+      .min(12)
+      .max(128)
+      .regex(/[A-Z]/, "Include an uppercase letter")
+      .regex(/[a-z]/, "Include a lowercase letter")
+      .regex(/[0-9]/, "Include a number"),
+  })
+  .strict();

@@ -18,9 +18,11 @@ export const createEmployeeSchema = z
       .enum(["active", "inactive", "on_leave"])
       .default("active"),
     salary: z.number().nonnegative().max(999999999).optional(),
+    role: z.enum(["admin", "hr", "manager", "employee"]).default("employee"),
   })
   .strict();
 export const updateEmployeeSchema = createEmployeeSchema
+  .omit({ role: true })
   .partial()
   .refine(
     (v) => Object.keys(v).length > 0,

@@ -5,6 +5,19 @@ import { DepartmentRepository } from "../repositories/department.repository";
 import { RefreshTokenRepository } from "../repositories/refresh-token.repository";
 import { AppError } from "../errors/app-error";
 import { AuditService } from "./audit.service";
+import { Role } from "../entities/Role";
+import { createHash, randomBytes } from "node:crypto";
+
+const hashInvitationToken = (token: string) =>
+  createHash("sha256").update(token).digest("hex");
+
+type EmployeeActor = {
+  id: string;
+  role: string;
+  employeeId: string | null;
+  permissions: string[];
+};
+
 export class EmployeeService {
   private employees = new EmployeeRepository();
   private departments = new DepartmentRepository();
@@ -68,37 +81,81 @@ export class EmployeeService {
     }
     return out;
   }
-  async create(input: any, actorId: string, requestId?: string) {
+  async create(input: any, actor: EmployeeActor, requestId?: string) {
+    const roleName = input.role || "employee";
+    if (
+      roleName !== "employee" &&
+      actor.role !== "admin"
+    )
+      throw AppError.forbidden("Only an administrator can assign this role");
     const dept = await this.departments.findById(input.departmentId);
     if (!dept) throw AppError.badRequest("Department does not exist");
     if (input.managerId) {
       const manager = await this.employees.findById(input.managerId);
       if (!manager) throw AppError.badRequest("Manager does not exist");
     }
+    const existing = await this.employees.findByWorkEmail(input.workEmail);
+    if (existing) throw AppError.conflict("An employee with this email already exists");
+    const role = await AppDataSource.getRepository(Role).findOneBy({
+      name: roleName,
+    });
+    if (!role) throw AppError.badRequest("Role does not exist");
+    const invitationToken = randomBytes(32).toString("base64url");
+    const invitationExpiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const { role: _role, salary, ...employeeInput } = input;
     const saved = await AppDataSource.transaction(async (manager) => {
       const e = manager.create(Employee, {
-        ...input,
+        ...employeeInput,
         phone: input.phone ?? null,
         managerId: input.managerId ?? null,
+        roleId: role.id,
+        passwordHash: null,
+        invitationTokenHash: hashInvitationToken(invitationToken),
+        invitationExpiresAt,
       });
       const result = await manager.save(e);
-      if (input.salary !== undefined)
+      if (salary !== undefined)
         await manager
           .createQueryBuilder()
           .update(Employee)
-          .set({ salary: String(input.salary) })
+          .set({ salary: String(salary) })
           .where("id=:id", { id: result.id })
           .execute();
       return result;
     });
     await this.audit.record({
-      actorEmployeeId: actorId,
+      actorEmployeeId: actor.id,
       action: "employee.created",
       resourceType: "employee",
       resourceId: saved.id,
       requestId,
     });
-    return this.get(saved.id, { id: actorId, role: "hr", employeeId: null });
+    await this.audit.record({
+      actorEmployeeId: actor.id,
+      action: "account.created",
+      resourceType: "employee",
+      resourceId: saved.id,
+      requestId,
+      metadata: { role: roleName },
+    });
+    if (roleName !== "employee")
+      await this.audit.record({
+        actorEmployeeId: actor.id,
+        action: "role.assigned",
+        resourceType: "employee",
+        resourceId: saved.id,
+        requestId,
+        metadata: { role: roleName },
+      });
+    return {
+      employee: await this.get(saved.id, actor),
+      account: {
+        loginId: saved.workEmail,
+        role: roleName,
+        invitationToken,
+        invitationExpiresAt,
+      },
+    };
   }
   async update(
     id: string,
