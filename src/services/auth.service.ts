@@ -77,6 +77,35 @@ export class AuthService {
       expiresIn: env.JWT_ACCESS_TTL,
     };
   }
+  async activateAccount(invitationToken: string, newPassword: string) {
+    const employee = await AppDataSource.getRepository(Employee)
+      .createQueryBuilder("employee")
+      .addSelect("employee.invitationTokenHash")
+      .where("employee.invitationTokenHash=:tokenHash", {
+        tokenHash: hashToken(invitationToken),
+      })
+      .getOne();
+    if (
+      !employee ||
+      !employee.invitationExpiresAt ||
+      employee.invitationExpiresAt <= new Date() ||
+      employee.passwordHash
+    )
+      throw AppError.badRequest("Invitation token is invalid or expired");
+    employee.passwordHash = await argon2.hash(newPassword, {
+      type: argon2.argon2id,
+    });
+    employee.invitationTokenHash = null;
+    employee.invitationExpiresAt = null;
+    await this.users.save(employee);
+    await this.audit.record({
+      actorEmployeeId: employee.id,
+      action: "account.activated",
+      resourceType: "employee",
+      resourceId: employee.id,
+    });
+    return { activated: true, loginId: employee.workEmail };
+  }
   async refresh(
     raw: string,
     meta: { ip?: string; agent?: string; requestId?: string },

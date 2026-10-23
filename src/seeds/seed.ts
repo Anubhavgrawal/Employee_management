@@ -67,25 +67,38 @@ async function seed() {
         "Set SEED_PASSWORD to a development password of at least 12 characters",
       );
     const adminRole = await roles.findOneByOrFail({ name: "admin" });
-    const adminEmail = "admin@example.test";
     const employeeRepo = AppDataSource.getRepository(Employee);
-    const admin = await employeeRepo.findOne({ where: { workEmail: adminEmail } });
-    const adminUser = admin || employeeRepo.create({
-      firstName: "System",
-      lastName: "Administrator",
-      workEmail: adminEmail,
-      departmentId: (await deps.findOneByOrFail({ name: "Engineering" })).id,
-      jobTitle: "System administrator",
-      joiningDate: new Date().toISOString().slice(0, 10),
-      employmentStatus: "active",
-    });
-    adminUser.passwordHash = await argon2.hash(password, {
-      type: argon2.argon2id,
-    });
-    adminUser.roleId = adminRole.id;
-    adminUser.isActive = true;
-    await employeeRepo.save(adminUser);
-    console.log("Development seed completed. Demo admin: admin@example.test");
+    const engineering = await deps.findOneByOrFail({ name: "Engineering" });
+    const accounts = [
+      { email: "admin@example.test", firstName: "System", lastName: "Administrator", title: "System administrator", role: adminRole },
+      { email: "hr@example.test", firstName: "Demo", lastName: "HR", title: "HR specialist", role: await roles.findOneByOrFail({ name: "hr" }) },
+      { email: "manager@example.test", firstName: "Demo", lastName: "Manager", title: "Engineering manager", role: await roles.findOneByOrFail({ name: "manager" }) },
+      { email: "employee@example.test", firstName: "Demo", lastName: "Employee", title: "Software engineer", role: await roles.findOneByOrFail({ name: "employee" }) },
+    ];
+    for (const account of accounts) {
+      const user =
+        (await employeeRepo.findOne({ where: { workEmail: account.email } })) ||
+        employeeRepo.create({
+          firstName: account.firstName,
+          lastName: account.lastName,
+          workEmail: account.email,
+          departmentId: engineering.id,
+          jobTitle: account.title,
+          joiningDate: new Date().toISOString().slice(0, 10),
+          employmentStatus: "active",
+        });
+      user.firstName = account.firstName;
+      user.lastName = account.lastName;
+      user.departmentId = engineering.id;
+      user.jobTitle = account.title;
+      user.passwordHash = await argon2.hash(password, { type: argon2.argon2id });
+      user.roleId = account.role.id;
+      user.invitationTokenHash = null;
+      user.invitationExpiresAt = null;
+      user.isActive = true;
+      await employeeRepo.save(user);
+    }
+    console.log("Development seed completed. Demo accounts: admin@example.test, hr@example.test, manager@example.test, employee@example.test");
   } finally {
     await AppDataSource.destroy();
   }

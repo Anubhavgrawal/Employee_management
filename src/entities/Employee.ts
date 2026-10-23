@@ -19,6 +19,10 @@ export class Employee {
   @Column({ name: "work_email",type:'varchar', length: 254, unique: true }) workEmail!: string;
   @Column({ name: "password_hash", type: "text", nullable: true, select: false })
   passwordHash!: string | null;
+  @Column({ name: "invitation_token_hash", type: "varchar", length: 64, nullable: true, select: false })
+  invitationTokenHash!: string | null;
+  @Column({ name: "invitation_expires_at", type: "timestamptz", nullable: true })
+  invitationExpiresAt!: Date | null;
   @Column({ name: "role_id", type: "uuid", nullable: true }) roleId!: string | null;
   @ManyToOne(() => Role, { nullable: true, onDelete: "RESTRICT" })
   @JoinColumn({ name: "role_id" })
