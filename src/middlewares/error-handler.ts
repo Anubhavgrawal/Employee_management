@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from "express";
 import multer from "multer";
 import { AppError } from "../errors/app-error";
+import { errorMessages, httpStatuses } from "../constants";
 export function notFound(req: Request, res: Response, next: NextFunction) {
   next(AppError.notFound(`Route ${req.method} ${req.path} not found`));
 }
@@ -14,16 +15,20 @@ export function errorHandler(
   let error =
     err instanceof AppError
       ? err
-      : new AppError(500, "An unexpected error occurred", "INTERNAL_ERROR");
+      : new AppError(
+          httpStatuses.INTERNAL_SERVER_ERROR,
+          "An unexpected error occurred",
+          "INTERNAL_ERROR",
+        );
   const e = err as { code?: string; constraint?: string; type?: string };
   if (e?.code === "23505")
-    error = AppError.conflict("A record with this unique value already exists");
+    error = AppError.conflict(errorMessages.DUPLICATE_RECORD);
   else if (e?.code === "23503")
-    error = AppError.badRequest("A referenced record does not exist");
+    error = AppError.badRequest(errorMessages.REFERENCED_RECORD_MISSING);
   else if (e?.type === "entity.parse.failed")
-    error = AppError.badRequest("Malformed JSON request body");
+    error = AppError.badRequest(errorMessages.MALFORMED_JSON);
   else if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE")
-    error = AppError.badRequest("Document exceeds the 10 MB size limit");
+    error = AppError.badRequest(errorMessages.DOCUMENT_TOO_LARGE);
   if (error.statusCode >= 500)
     console.error(
       JSON.stringify({

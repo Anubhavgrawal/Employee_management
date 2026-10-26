@@ -10,7 +10,11 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
   JWT_ACCESS_SECRET: z
     .string()
-    .min(32, "JWT_ACCESS_SECRET must contain at least 32 characters"),
+    .min(32, "JWT_ACCESS_SECRET must contain at least 32 characters")
+    .refine(
+      (secret) => !secret.toLowerCase().startsWith("replace_with"),
+      "JWT_ACCESS_SECRET must not use a placeholder value",
+    ),
   JWT_ISSUER: z.string().default("employee-management-api"),
   JWT_AUDIENCE: z.string().default("employee-management-clients"),
   JWT_ACCESS_TTL: z.string().default("15m"),

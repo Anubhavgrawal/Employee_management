@@ -11,13 +11,13 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../src/config/object-storage", () => ({ objectStorage: { put: mocks.put, remove: vi.fn(), downloadUrl: vi.fn() } }));
-vi.mock("../src/repositories/employee-document.repository", () => ({
+vi.mock("../src/api/v1/repositories/employee-document.repository", () => ({
   EmployeeDocumentRepository: class { list = mocks.list; findById = mocks.findById; save = mocks.save; remove = mocks.remove; },
 }));
-vi.mock("../src/services/audit.service", () => ({ AuditService: class { record = mocks.audit; } }));
+vi.mock("../src/api/v1/services/audit.service", () => ({ AuditService: class { record = mocks.audit; } }));
 vi.mock("../src/config/database", () => ({ AppDataSource: { getRepository: () => ({ exists: mocks.exists }) } }));
 
-import { DocumentService } from "../src/services/document.service";
+import { DocumentService } from "../src/api/v1/services/document.service";
 
 const actor = { id: "actor", role: "employee", employeeId: "employee-1" };
 const pdf = { originalname: "contract.pdf", mimetype: "application/pdf", size: 12, buffer: Buffer.from("%PDF-1.7\ncontent") } as Express.Multer.File;
