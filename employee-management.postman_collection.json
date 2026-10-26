@@ -15,6 +15,42 @@
     {
       "key": "refreshToken",
       "value": "PASTE_REFRESH_TOKEN"
+    },
+    {
+      "key": "seedPassword",
+      "value": "SET_YOUR_SEED_PASSWORD"
+    },
+    {
+      "key": "departmentId",
+      "value": "PASTE_ENGINEERING_DEPARTMENT_ID"
+    },
+    {
+      "key": "hrAccessToken",
+      "value": ""
+    },
+    {
+      "key": "managerAccessToken",
+      "value": ""
+    },
+    {
+      "key": "employeeAccessToken",
+      "value": ""
+    },
+    {
+      "key": "hrInvitationToken",
+      "value": ""
+    },
+    {
+      "key": "managerInvitationToken",
+      "value": ""
+    },
+    {
+      "key": "employeeInvitationToken",
+      "value": ""
+    },
+    {
+      "key": "employeeEmail",
+      "value": "employee.created@example.test"
     }
   ],
   "item": [
@@ -37,10 +73,300 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\"email\":\"admin@example.test\",\"password\":\"SET_YOUR_SEED_PASSWORD\"}"
+          "raw": "{\"email\":\"admin@example.test\",\"password\":\"{{seedPassword}}\"}"
         },
         "url": "{{baseUrl}}/api/v1/auth/login"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.expect(pm.response.code).to.eql(200);",
+              "pm.collectionVariables.set('accessToken', json.data.accessToken);",
+              "pm.collectionVariables.set('refreshToken', json.data.refreshToken);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "List departments (save departmentId)",
+      "request": {
+        "method": "GET",
+        "header": [
+          {
+            "key": "Authorization",
+            "value": "Bearer {{accessToken}}"
+          }
+        ],
+        "url": "{{baseUrl}}/api/v1/departments"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.expect(pm.response.code).to.eql(200);",
+              "pm.collectionVariables.set('departmentId', json.data[0].id);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Create HR account (admin)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"firstName\":\"Demo\",\"lastName\":\"HR\",\"workEmail\":\"hr.created@example.test\",\"departmentId\":\"{{departmentId}}\",\"jobTitle\":\"HR Specialist\",\"joiningDate\":\"2026-10-21\",\"role\":\"hr\"}"
+        },
+        "url": "{{baseUrl}}/api/v1/employees"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.expect(pm.response.code).to.eql(201);",
+              "pm.collectionVariables.set('hrInvitationToken', json.data.account.invitationToken);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Create Manager account (admin)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"firstName\":\"Demo\",\"lastName\":\"Manager\",\"workEmail\":\"manager.created@example.test\",\"departmentId\":\"{{departmentId}}\",\"jobTitle\":\"Engineering Manager\",\"joiningDate\":\"2026-10-21\",\"role\":\"manager\"}"
+        },
+        "url": "{{baseUrl}}/api/v1/employees"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.expect(pm.response.code).to.eql(201);",
+              "pm.collectionVariables.set('managerInvitationToken', json.data.account.invitationToken);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Activate HR account",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"invitationToken\":\"{{hrInvitationToken}}\",\"newPassword\":\"HrUser123!\"}"
+        },
+        "url": "{{baseUrl}}/api/v1/auth/activate"
       }
+    },
+    {
+      "name": "Activate Manager account",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"invitationToken\":\"{{managerInvitationToken}}\",\"newPassword\":\"Manager123!\"}"
+        },
+        "url": "{{baseUrl}}/api/v1/auth/activate"
+      }
+    },
+    {
+      "name": "Login as HR",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"email\":\"hr.created@example.test\",\"password\":\"HrUser123!\"}"
+        },
+        "url": "{{baseUrl}}/api/v1/auth/login"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.expect(pm.response.code).to.eql(200);",
+              "pm.collectionVariables.set('hrAccessToken', json.data.accessToken);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Login as Manager",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"email\":\"manager.created@example.test\",\"password\":\"Manager123!\"}"
+        },
+        "url": "{{baseUrl}}/api/v1/auth/login"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.expect(pm.response.code).to.eql(200);",
+              "pm.collectionVariables.set('managerAccessToken', json.data.accessToken);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Create employee account (HR)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{hrAccessToken}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"firstName\":\"Created\",\"lastName\":\"Employee\",\"workEmail\":\"{{employeeEmail}}\",\"departmentId\":\"{{departmentId}}\",\"jobTitle\":\"Software Engineer\",\"joiningDate\":\"2026-10-21\",\"role\":\"employee\"}"
+        },
+        "url": "{{baseUrl}}/api/v1/employees"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.expect(pm.response.code).to.eql(201);",
+              "pm.collectionVariables.set('employeeInvitationToken', json.data.account.invitationToken);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Activate employee account",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"invitationToken\":\"{{employeeInvitationToken}}\",\"newPassword\":\"Employee123!\"}"
+        },
+        "url": "{{baseUrl}}/api/v1/auth/activate"
+      }
+    },
+    {
+      "name": "Login as new employee",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"email\":\"{{employeeEmail}}\",\"password\":\"Employee123!\"}"
+        },
+        "url": "{{baseUrl}}/api/v1/auth/login"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "const json = pm.response.json();",
+              "pm.expect(pm.response.code).to.eql(200);",
+              "pm.collectionVariables.set('employeeAccessToken', json.data.accessToken);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Protected endpoint without token (should fail)",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/api/v1/employees"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": ["pm.expect(pm.response.code).to.eql(401);"]
+          }
+        }
+      ]
+    },
+    {
+      "name": "HR cannot assign admin role (should fail)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{hrAccessToken}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"firstName\":\"Blocked\",\"lastName\":\"Admin\",\"workEmail\":\"blocked.admin@example.test\",\"departmentId\":\"{{departmentId}}\",\"jobTitle\":\"Blocked\",\"joiningDate\":\"2026-10-21\",\"role\":\"admin\"}"
+        },
+        "url": "{{baseUrl}}/api/v1/employees"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.expect(pm.response.code).to.eql(403);"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Manager cannot create without employee:create permission (should fail)",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Authorization", "value": "Bearer {{managerAccessToken}}" },
+          { "key": "Content-Type", "value": "application/json" }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\"firstName\":\"Blocked\",\"lastName\":\"Creation\",\"workEmail\":\"blocked.creation@example.test\",\"departmentId\":\"{{departmentId}}\",\"jobTitle\":\"Blocked\",\"joiningDate\":\"2026-10-21\",\"role\":\"employee\"}"
+        },
+        "url": "{{baseUrl}}/api/v1/employees"
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": ["pm.expect(pm.response.code).to.eql(403);"]
+          }
+        }
+      ]
     },
     {
       "name": "List employees (Bearer token)",

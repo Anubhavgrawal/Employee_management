@@ -22,7 +22,7 @@ export class EmployeeController {
       res,
       201,
       "Employee created",
-      await this.service.create(req.body, req.auth!.id, res.locals.requestId),
+      await this.service.create(req.body, req.auth!, res.locals.requestId),
     );
   update = async (req: Request, res: Response) =>
     ApiResponse.send(

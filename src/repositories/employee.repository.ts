@@ -58,6 +58,12 @@ export class EmployeeRepository {
       relations: { department: true, manager: true },
     });
   }
+  findByWorkEmail(workEmail: string) {
+    return this.repo
+      .createQueryBuilder("e")
+      .where("LOWER(e.workEmail)=LOWER(:workEmail)", { workEmail })
+      .getOne();
+  }
   findByIdWithSalary(id: string) {
     return this.repo
       .createQueryBuilder("e")

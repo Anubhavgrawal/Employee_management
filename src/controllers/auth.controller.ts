@@ -14,6 +14,16 @@ export class AuthController {
         requestId: res.locals.requestId,
       }),
     );
+  activateAccount = async (req: Request, res: Response) =>
+    ApiResponse.send(
+      res,
+      200,
+      "Account activated",
+      await this.service.activateAccount(
+        req.body.invitationToken,
+        req.body.newPassword,
+      ),
+    );
   refresh = async (req: Request, res: Response) =>
     ApiResponse.send(
       res,
