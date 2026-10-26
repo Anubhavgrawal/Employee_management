@@ -6,7 +6,7 @@ module.exports = {
   roots: ["<rootDir>/tests"],
   testMatch: [
     "**/integration/*.test.ts",
-    "**/auth.test.ts",
+    "**/middlewares/auth/*.test.ts",
   ],
   moduleFileExtensions: ["ts", "js", "json"],
   setupFiles: ["<rootDir>/tests/config/jest.setup.ts"],

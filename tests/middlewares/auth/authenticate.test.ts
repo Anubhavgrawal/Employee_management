@@ -56,14 +56,14 @@ describe("authenticate middleware", () => {
   });
 
   it.each([
-    ["malformed JWT", "not.a.jwt"],
-    ["incorrectly signed JWT", jwt.sign({ type: "access", sub: authTestUser.id, role: authTestUser.role }, "wrong-secret")],
-    ["expired JWT", createAccessToken({}, { expiresIn: -1 })],
-    ["wrong issuer", createAccessToken({}, { issuer: "wrong-issuer" })],
-    ["wrong audience", createAccessToken({}, { audience: "wrong-audience" })],
-    ["wrong token type", createAccessToken({ type: "refresh" })],
-    ["missing role claim", createAccessToken({ role: undefined })],
-  ])("rejects a %s", async (_description, token) => {
+    ["malformed JWT", "not-a-token", "Access token is malformed"],
+    ["incorrectly signed JWT", jwt.sign({ type: "access", sub: authTestUser.id, role: authTestUser.role }, "wrong-secret"), "Access token signature is invalid"],
+    ["expired JWT", createAccessToken({}, { expiresIn: -1 }), "Access token has expired"],
+    ["wrong issuer", createAccessToken({}, { issuer: "wrong-issuer" }), "Access token issuer is invalid"],
+    ["wrong audience", createAccessToken({}, { audience: "wrong-audience" }), "Access token audience is invalid"],
+    ["wrong token type", createAccessToken({ type: "refresh" }), "Access token claims are invalid"],
+    ["missing role claim", createAccessToken({ role: undefined }), "Access token claims are invalid"],
+  ])("rejects a %s", async (_description, token, message) => {
     const response = await request(app)
       .get(protectedPath)
       .set("Authorization", `Bearer ${token}`);
@@ -72,7 +72,7 @@ describe("authenticate middleware", () => {
     expect(response.body).toMatchObject({
       success: false,
       code: "UNAUTHORIZED",
-      message: "Invalid or expired access token",
+      message,
     });
     expect(response.body).not.toHaveProperty("reached");
   });
@@ -95,7 +95,7 @@ describe("authenticate middleware", () => {
     expect(response.body).toMatchObject({
       success: false,
       code: "UNAUTHORIZED",
-      message: "Invalid or expired access token",
+      message: "Access token claims are invalid",
     });
     expect(response.body).not.toHaveProperty("reached");
   });

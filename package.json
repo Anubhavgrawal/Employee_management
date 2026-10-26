@@ -11,10 +11,12 @@
     "migration:revert": "typeorm-ts-node-commonjs migration:revert -d src/config/database.ts",
     "migration:generate": "typeorm-ts-node-commonjs migration:generate src/migrations/SchemaUpdate -d src/config/database.ts",
     "seed": "tsx src/seeds/seed.ts",
-    "test": "vitest run",
+    "test": "npm run test:unit && npm run test:integration",
+    "test:unit": "vitest run && jest --config jest.config.cjs --testPathIgnorePatterns=tests/integration",
+    "test:integration": "jest --config jest.config.cjs --testPathPatterns=tests/integration",
     "test:watch": "vitest",
     "test:jest": "jest --config jest.config.cjs",
-    "test:all": "npm test && npm run test:jest"
+    "test:all": "npm test"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1153.0",

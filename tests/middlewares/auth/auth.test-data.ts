@@ -1,6 +1,6 @@
 import jwt from "jsonwebtoken";
 import { env } from "../../../src/config/env";
-import type { AuthUser } from "../../../src/middlewares/authenticate";
+import type { AuthUser } from "../../../src/interfaces/auth.interface";
 
 export const authTestUser = {
   id: "employee-123",

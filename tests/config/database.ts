@@ -4,13 +4,13 @@ import dotenv from "dotenv";
 import path from "node:path";
 import { DataSource } from "typeorm";
 
-import { AuditLog } from "../../src/entities/AuditLog";
-import { Department } from "../../src/entities/Department";
-import { Employee } from "../../src/entities/Employee";
-import { EmployeeDocument } from "../../src/entities/EmployeeDocument";
-import { Permission } from "../../src/entities/Permission";
-import { RefreshToken } from "../../src/entities/RefreshToken";
-import { Role } from "../../src/entities/Role";
+import { AuditLog } from "../../src/api/v1/entities/AuditLog";
+import { Department } from "../../src/api/v1/entities/Department";
+import { Employee } from "../../src/api/v1/entities/Employee";
+import { EmployeeDocument } from "../../src/api/v1/entities/EmployeeDocument";
+import { Permission } from "../../src/api/v1/entities/Permission";
+import { RefreshToken } from "../../src/api/v1/entities/RefreshToken";
+import { Role } from "../../src/api/v1/entities/Role";
 
 dotenv.config({
   path: path.resolve(process.cwd(), ".env.test"),

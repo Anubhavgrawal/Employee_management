@@ -1,13 +1,16 @@
 import "reflect-metadata";
 import { AppDataSource } from "../config/database";
-import { Role } from "../entities/Role";
-import { Permission } from "../entities/Permission";
-import { Department } from "../entities/Department";
-import { Employee } from "../entities/Employee";
+import { Role } from "../api/v1/entities/Role";
+import { Permission } from "../api/v1/entities/Permission";
+import { Department } from "../api/v1/entities/Department";
+import { Employee } from "../api/v1/entities/Employee";
 import argon2 from "argon2";
+import { roles as roleConstants } from "../constants";
 async function seed() {
-  await AppDataSource.initialize();
+  let initialized = false;
   try {
+    await AppDataSource.initialize();
+    initialized = true;
     const roles = AppDataSource.getRepository(Role),
       perms = AppDataSource.getRepository(Permission),
       deps = AppDataSource.getRepository(Department);
@@ -25,16 +28,16 @@ async function seed() {
       if (!(await perms.findOne({ where: { name } })))
         await perms.save(perms.create({ name, description: `Allows ${name}` }));
     const map: Record<string, string[]> = {
-      admin: permissionNames,
-      hr: [
+      [roleConstants.ADMIN]: permissionNames,
+      [roleConstants.HR]: [
         "employee:read",
         "employee:create",
         "employee:update",
         "employee:deactivate",
         "department:manage",
       ],
-      manager: ["employee:read", "employee:update"],
-      employee: [],
+      [roleConstants.MANAGER]: ["employee:read", "employee:update"],
+      [roleConstants.EMPLOYEE]: [],
     };
     for (const name of Object.keys(map)) {
       let role = await roles.findOne({
@@ -66,14 +69,14 @@ async function seed() {
       throw new Error(
         "Set SEED_PASSWORD to a development password of at least 12 characters",
       );
-    const adminRole = await roles.findOneByOrFail({ name: "admin" });
+    const adminRole = await roles.findOneByOrFail({ name: roleConstants.ADMIN });
     const employeeRepo = AppDataSource.getRepository(Employee);
     const engineering = await deps.findOneByOrFail({ name: "Engineering" });
     const accounts = [
       { email: "admin@example.test", firstName: "System", lastName: "Administrator", title: "System administrator", role: adminRole },
-      { email: "hr@example.test", firstName: "Demo", lastName: "HR", title: "HR specialist", role: await roles.findOneByOrFail({ name: "hr" }) },
-      { email: "manager@example.test", firstName: "Demo", lastName: "Manager", title: "Engineering manager", role: await roles.findOneByOrFail({ name: "manager" }) },
-      { email: "employee@example.test", firstName: "Demo", lastName: "Employee", title: "Software engineer", role: await roles.findOneByOrFail({ name: "employee" }) },
+      { email: "hr@example.test", firstName: "Demo", lastName: "HR", title: "HR specialist", role: await roles.findOneByOrFail({ name: roleConstants.HR }) },
+      { email: "manager@example.test", firstName: "Demo", lastName: "Manager", title: "Engineering manager", role: await roles.findOneByOrFail({ name: roleConstants.MANAGER }) },
+      { email: "employee@example.test", firstName: "Demo", lastName: "Employee", title: "Software engineer", role: await roles.findOneByOrFail({ name: roleConstants.EMPLOYEE }) },
     ];
     for (const account of accounts) {
       const user =
@@ -100,10 +103,13 @@ async function seed() {
     }
     console.log("Development seed completed. Demo accounts: admin@example.test, hr@example.test, manager@example.test, employee@example.test");
   } finally {
-    await AppDataSource.destroy();
+    if (initialized && AppDataSource.isInitialized) {
+      await AppDataSource.destroy();
+    }
   }
 }
 seed().catch((e) => {
-  console.error("Seed failed:", e.message);
-  process.exit(1);
+  const message = e instanceof Error ? e.message : String(e);
+  console.error("Seed failed:", message);
+  process.exitCode = 1;
 });

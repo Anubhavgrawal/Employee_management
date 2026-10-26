@@ -6,10 +6,8 @@ import { env } from "./config/env";
 import { requestId } from "./middlewares/request-id";
 import { apiRateLimit } from "./middlewares/rate-limit";
 import { notFound, errorHandler } from "./middlewares/error-handler";
-import authRoutes from "./routes/auth.routes";
-import employeeRoutes from "./routes/employee.routes";
-import departmentRoutes from "./routes/department.routes";
-import documentRoutes from "./routes/document.routes";
+import v1Router from "./api/v1/routes";
+import { API_V1_PREFIX } from "./constants/api";
 export const app = express();
 app.disable("x-powered-by");
 app.use(requestId);
@@ -25,7 +23,7 @@ app.use(
   }),
 );
 app.use(express.json({ limit: "100kb", strict: true }));
-app.use("/api/v1", apiRateLimit);
+app.use(API_V1_PREFIX, apiRateLimit);
 app.get("/health", (_req, res) =>
   res.json({
     success: true,
@@ -34,9 +32,6 @@ app.get("/health", (_req, res) =>
     requestId: res.locals.requestId,
   }),
 );
-app.use("/api/v1/auth", authRoutes);
-app.use("/api/v1/employees", employeeRoutes);
-app.use("/api/v1/departments", departmentRoutes);
-app.use("/api/v1", documentRoutes);
+app.use(API_V1_PREFIX, v1Router);
 app.use(notFound);
 app.use(errorHandler);

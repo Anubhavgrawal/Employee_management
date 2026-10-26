@@ -5,9 +5,9 @@ import argon2 from "argon2";
 import request from "supertest";
 import { afterAll, beforeAll, describe, expect, it } from "@jest/globals";
 import { In } from "typeorm";
-import { Employee } from "../../src/entities/Employee";
-import { Department } from "../../src/entities/Department";
-import { Role } from "../../src/entities/Role";
+import { Employee } from "../../src/api/v1/entities/Employee";
+import { Department } from "../../src/api/v1/entities/Department";
+import { Role } from "../../src/api/v1/entities/Role";
 
 // Load the guarded test environment before importing the application datasource.
 dotenv.config({
