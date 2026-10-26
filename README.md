@@ -13,7 +13,8 @@ Secure TypeScript and Express REST API for employee records, role-based access c
 - Audit logging for authentication and important mutations
 - Request validation with Zod
 - PostgreSQL persistence with TypeORM migrations
-- Jest middleware tests and Vitest service/document tests
+- Jest middleware and security integration tests
+- Vitest document and service tests
 
 ## Requirements
 
@@ -49,12 +50,20 @@ openssl rand -hex 32
 
 Create the configured PostgreSQL database before running migrations.
 
+For integration tests, create a separate database named `employee_management_test`. Test database configuration is stored in `.env.test` and is guarded so integration tests refuse to connect to any other database.
+
 ## Database Setup
 
 Apply all migrations:
 
 ```bash
 npm run migration:run
+```
+
+Apply migrations to the test database only:
+
+```bash
+npm run migration:test
 ```
 
 Create development accounts and the `Engineering` department:
@@ -233,11 +242,26 @@ Run the existing document tests with Vitest:
 npm test
 ```
 
-Run Jest authentication and authorization middleware tests:
+Run the Jest authentication and authorization middleware tests:
 
 ```bash
 npm run test:jest
 ```
+
+Run the Jest security integration tests individually:
+
+```bash
+npm run test:jest -- --runInBand tests/integration/auth-bola-mass-assignment-replay.test.ts
+```
+
+These integration tests use only `employee_management_test` and cover:
+
+- Authentication failures and invalid credentials
+- Broken object-level authorization (BOLA)
+- Mass-assignment protection for restricted employee fields
+- Refresh-token rotation and replay detection
+
+They create isolated test employees and departments and clean up their own records, including refresh tokens and audit logs.
 
 Run both test suites:
 
@@ -245,7 +269,7 @@ Run both test suites:
 npm run test:all
 ```
 
-The tests generate JWTs directly and do not call the login API or require PostgreSQL for middleware coverage.
+Middleware tests generate JWTs directly and do not call the login API or require PostgreSQL. Integration tests use real API routes and the isolated PostgreSQL test database.
 
 Run the TypeScript build:
 
@@ -259,3 +283,30 @@ npm run build
 - Postman collection: [employee-management.postman_collection.json](employee-management.postman_collection.json)
 
 Never commit `.env`, real passwords, JWT secrets, invitation tokens, or database credentials.
+
+## Project Structure
+
+```text
+src/
+	config/          Environment, database, and object-storage configuration
+	controllers/     HTTP request handlers
+	entities/        TypeORM entities
+	middlewares/     Authentication, authorization, validation, and uploads
+	migrations/      Database schema migrations
+	repositories/    Database access layer
+	routes/          API route registration
+	services/        Business logic and audit operations
+	validators/      Zod request schemas
+tests/
+	config/          Test datasource and Jest setup
+	integration/     Route-level security integration tests
+	middlewares/     Authentication and authorization middleware tests
+```
+
+## Security Notes
+
+- Use a unique JWT secret in every environment.
+- Never use development seed passwords in production.
+- Never commit `.env`, `.env.test`, database credentials, tokens, or generated files.
+- Run integration tests only against `employee_management_test`.
+- Apply migrations before starting a fresh database.
