@@ -1,10 +1,23 @@
 import "reflect-metadata";
-import { app } from "./app";
 import { AppDataSource } from "./config/database";
 import { env } from "./config/env";
+import { connectRedis, disconnectRedis } from "./config/redis";
+import { startManagerCheckCron } from "./cron/manager-check.cron";
+import { startMissingPhoneCron } from "./cron/missing-phone.cron";
+import { startRedisExpirySubscriber } from "./config/redis-expiry-subscriber";
+import { startTokenExpiryReconciliationCron } from "./cron/token-expiry-reconciliation.cron";
 async function start() {
+  let startupStep = "database";
   try {
     await AppDataSource.initialize();
+    startupStep = "Redis";
+    await connectRedis();
+      const expirySubscription = await startRedisExpirySubscriber();
+    const managerCheckCron = startManagerCheckCron();
+    const missingPhoneCron = startMissingPhoneCron();
+      const tokenExpiryReconciliationCron = startTokenExpiryReconciliationCron();
+    startupStep = "API";
+    const { app } = await import("./app.js");
     const server = app.listen(env.PORT, () =>
       console.log(`Employee Management API listening on port ${env.PORT}`),
     );
@@ -12,7 +25,12 @@ async function start() {
       console.log(`${signal} received; closing server`);
       server.close(async () => {
         try {
+          managerCheckCron.stop();
+          missingPhoneCron.stop();
+            tokenExpiryReconciliationCron.stop();
+            await expirySubscription?.stop();
           if (AppDataSource.isInitialized) await AppDataSource.destroy();
+          await disconnectRedis();
           process.exit(0);
         } catch {
           process.exit(1);
@@ -22,10 +40,13 @@ async function start() {
     };
     process.on("SIGINT", () => void shutdown("SIGINT"));
     process.on("SIGTERM", () => void shutdown("SIGTERM"));
-  } catch {
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "Unknown startup error";
     console.error(
-      "Application startup failed. Verify configuration and database connectivity.",
+      `Application startup failed during ${startupStep} startup: ${reason}`,
     );
+    if (AppDataSource.isInitialized) await AppDataSource.destroy().catch(() => undefined);
+    await disconnectRedis().catch(() => undefined);
     process.exit(1);
   }
 }

@@ -1,13 +1,15 @@
 import "reflect-metadata";
 import { DataSource } from "typeorm";
 import { env } from "./env";
-import { Employee } from "../entities/Employee";
-import { Department } from "../entities/Department";
-import { Role } from "../entities/Role";
-import { Permission } from "../entities/Permission";
-import { RefreshToken } from "../entities/RefreshToken";
-import { AuditLog } from "../entities/AuditLog";
-import { EmployeeDocument } from "../entities/EmployeeDocument";
+import { Employee } from "../api/v1/entities/Employee";
+import { Department } from "../api/v1/entities/Department";
+import { Role } from "../api/v1/entities/Role";
+import { Permission } from "../api/v1/entities/Permission";
+import { RefreshToken } from "../api/v1/entities/RefreshToken";
+import { AuditLog } from "../api/v1/entities/AuditLog";
+import { EmployeeDocument } from "../api/v1/entities/EmployeeDocument";
+import { ActivityLog } from "../api/v1/entities/ActivityLog";
+import { SessionAuditEvent } from "../api/v1/entities/SessionAuditEvent";
 
 // synchronize is deliberately disabled: migrations are the source of schema changes.
 export const AppDataSource = new DataSource({
@@ -21,6 +23,8 @@ export const AppDataSource = new DataSource({
     RefreshToken,
     AuditLog,
     EmployeeDocument,
+    ActivityLog,
+    SessionAuditEvent,
   ],
   migrations: ["src/migrations/*.ts"],
   synchronize: false,

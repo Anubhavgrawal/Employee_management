@@ -1,1 +1,335 @@
-# Employee_management
+
+Session cleanup subscribes to Redis key-expiry events and also reconciles expired records every 15 minutes. Key expiry notifications must include keyevent and expired events (`Ex`). On Redis servers where the app user cannot run `CONFIG SET`, configure this in `redis.conf` and restart Redis:
+
+```conf
+notify-keyspace-events Ex
+```
+
+At startup the API attempts to add `E` and `x` to the current setting while preserving existing notification flags. Pub/Sub expiry events are best-effort cleanup signals, not an authentication control: every protected request independently validates the signed JWT and checks active session metadata in Redis. If that Redis check is unavailable, the API fails closed with `503 SESSION_STORE_UNAVAILABLE`; this provides immediate revocation at the cost of Redis availability being required for authenticated requests. The reconciliation job repairs missed events and removes expired database refresh-token rows and stale session metadata.
+# Employee Management API
+
+Secure TypeScript and Express REST API for employee records, role-based access control, authentication, departments, audit logs, and employee document storage.
+
+## Features
+
+- JWT access tokens with issuer, audience, expiry, and HS256 validation
+- Refresh-token rotation and session management
+- Argon2id password hashing
+- One-time invitation flow for new employee accounts
+- Role-based access control for `admin`, `hr`, `manager`, and `employee`
+- Employee, department, and document management
+- Audit logging for authentication and important mutations
+- Request validation with Zod
+- PostgreSQL persistence with TypeORM migrations
+- Jest middleware and security integration tests
+- Vitest document and service tests
+
+## Requirements
+
+- Node.js 20 or newer
+- npm
+- PostgreSQL 14 or newer
+- Optional: an S3-compatible object-storage service for documents
+
+## Installation
+
+```bash
+npm install
+```
+
+Create a local environment file:
+
+```bash
+cp .env.example .env
+```
+
+Update `.env` before starting the application:
+
+- Set `DATABASE_URL` to a working PostgreSQL connection.
+- Set `REDIS_URL` for sessions, failed-login counters, and rate limiting.
+- Replace the JWT placeholder with a random secret of at least 32 characters.
+- Set `SEED_PASSWORD` to a development password of at least 12 characters when using the seed command.
+- Keep `.env` local. It is ignored by Git.
+
+Example secret generation:
+
+```bash
+openssl rand -hex 32
+```
+
+Create the configured PostgreSQL database before running migrations.
+
+### Redis Setup
+
+The API uses the Redis instance at `REDIS_URL` for sessions, rate limiting, and employee/department cache-aside data. Employee detail and department detail entries expire after five minutes; employee and department lists expire after one minute. Cache failures fall back to PostgreSQL.
+
+For integration tests, create a separate database named `employee_management_test`. Test database configuration is stored in `.env.test` and is guarded so integration tests refuse to connect to any other database.
+
+## Database Setup
+
+Apply all migrations:
+
+```bash
+npm run migration:run
+```
+
+Apply migrations to the test database only:
+
+```bash
+npm run migration:test
+```
+
+Create development accounts and the `Engineering` department:
+
+```bash
+npm run seed
+```
+
+The seed is safe to rerun. It creates or updates one account for each supported role:
+
+- `admin@example.test`
+- `hr@example.test`
+- `manager@example.test`
+- `employee@example.test`
+
+All seeded accounts use the value of `SEED_PASSWORD`. The seed refuses to run when `NODE_ENV=production`.
+
+## Running the API
+
+Development mode:
+
+```bash
+npm run dev
+```
+
+Build and start the compiled application:
+
+```bash
+npm run build
+npm start
+```
+
+The default server URL is `http://localhost:3000`.
+
+Health check:
+
+```http
+GET /health
+```
+
+## Authentication Workflow
+
+### Login
+
+```http
+POST /api/v1/auth/login
+Content-Type: application/json
+```
+
+```json
+{
+	"email": "admin@example.test",
+	"password": "<SEED_PASSWORD>"
+}
+```
+
+The response contains an `accessToken`, `refreshToken`, `sessionId`, and expiry information. Send the access token on protected routes:
+
+```http
+Authorization: Bearer <access-token>
+```
+
+### Create an account
+
+Admins and HR users with `employee:create` can create employee records. The request creates a linked login account and returns a one-time invitation token. HR can create the default `employee` role; only an administrator can assign `hr`, `manager`, or `admin`.
+
+```http
+POST /api/v1/employees
+Authorization: Bearer <access-token>
+Content-Type: application/json
+```
+
+```json
+{
+	"firstName": "Jane",
+	"lastName": "Doe",
+	"workEmail": "jane.doe@example.test",
+	"departmentId": "<department-uuid>",
+	"jobTitle": "Software Engineer",
+	"joiningDate": "2026-10-22",
+	"role": "employee"
+}
+```
+
+The successful `201` response includes `data.employee` and `data.account`. The account data contains the login email, role, one-time invitation token, and invitation expiry. Do not log or expose the invitation token unnecessarily.
+
+### Activate an invitation
+
+The new employee chooses their own password using the invitation token:
+
+```http
+POST /api/v1/auth/activate
+Content-Type: application/json
+```
+
+```json
+{
+	"invitationToken": "<one-time-token>",
+	"newPassword": "<strong-password>"
+}
+```
+
+Passwords must be at least 12 characters and include uppercase, lowercase, and numeric characters. The invitation token is single-use and expires after 24 hours.
+
+### Password and sessions
+
+- `POST /api/v1/auth/change-password` changes the current password and revokes all sessions.
+- `POST /api/v1/auth/refresh` rotates a refresh token.
+- `POST /api/v1/auth/logout` revokes the supplied session token.
+- `POST /api/v1/auth/logout-all` revokes all sessions for the current user.
+- `GET /api/v1/auth/sessions` lists active sessions.
+- `GET /api/v1/auth/sessions/history` lists recent audit events for the signed-in user.
+- `DELETE /api/v1/auth/sessions/:id` revokes one session.
+- `GET /api/v1/admin/session-metrics` returns today's UTC session expiry, revocation/logout, and refresh-token reuse counts (admin only).
+
+Access JWTs are signed with HS256 and validated for signature, issuer, audience, and expiry (with a five-second clock-skew tolerance). Access-token lifetime is configured independently with `JWT_ACCESS_TTL`; refresh-token/session lifetime is configured with `REFRESH_TOKEN_TTL_DAYS`. Refresh credentials are random opaque values; only their SHA-256 hashes are stored in PostgreSQL and Redis.
+
+Each login creates a UUID session family in Redis with user ID, creation/expiry timestamps, revocation status, and device metadata. The Redis record expires at the refresh-session expiry. Access tokens include that session ID, and protected requests check that Redis still considers the session active. Logout, logout-all, password change, explicit session revocation, account deactivation, and refresh-token reuse revoke server-side session state. Reusing an already-rotated refresh token revokes its entire session family; concurrent refreshes are serialized by a conditional PostgreSQL update so only one rotation succeeds.
+
+Because protected requests require a Redis session lookup, Redis is part of the authentication availability path: when Redis is unavailable, the API returns `503 SESSION_STORE_UNAVAILABLE` rather than accepting a token whose revocation state cannot be confirmed. This adds one Redis read per authenticated request but allows logout and revocation to take effect immediately instead of waiting for access-token expiry.
+
+Session lifecycle events are stored durably in PostgreSQL `session_audit_events`, with a unique correlation ID, event timestamp, and processing status. Repeated lifecycle/expiry notifications are idempotent. Audit writes retry transient database failures and return `503 SESSION_AUDIT_UNAVAILABLE` after bounded retries rather than silently dropping an event. User history is restricted to the authenticated user; aggregate session metrics require the admin role.
+
+## Roles and Permissions
+
+| Role | Permissions and scope |
+| --- | --- |
+| `admin` | All configured permissions; can assign elevated roles and manage all records |
+| `hr` | Read, create, update, and deactivate employees; manage departments; cannot assign elevated roles |
+| `manager` | Read employees and update employees within the manager's direct-report scope |
+| `employee` | Own profile and own permitted document operations |
+
+Common employee routes:
+
+- `GET /api/v1/employees`
+- `POST /api/v1/employees`
+- `GET /api/v1/employees/me`
+- `PATCH /api/v1/employees/me`
+- `GET /api/v1/employees/:id`
+- `PATCH /api/v1/employees/:id`
+- `DELETE /api/v1/employees/:id`
+
+Department routes:
+
+- `GET /api/v1/departments`
+- `POST /api/v1/departments`
+- `PATCH /api/v1/departments/:id`
+
+Document routes require authentication and use multipart form data for uploads:
+
+- `POST /api/v1/employees/:id/documents` with file field `file`
+- `GET /api/v1/employees/:id/documents`
+- `GET /api/v1/documents/:id/download-url`
+- `DELETE /api/v1/documents/:id`
+
+## Response Format
+
+Successful responses use this envelope:
+
+```json
+{
+	"success": true,
+	"message": "...",
+	"data": {},
+	"requestId": "..."
+}
+```
+
+Errors use this envelope:
+
+```json
+{
+	"success": false,
+	"message": "...",
+	"code": "...",
+	"details": {},
+	"requestId": "..."
+}
+```
+
+## Testing
+
+Run the existing document tests with Vitest:
+
+```bash
+npm test
+```
+
+Run the Jest authentication and authorization middleware tests:
+
+```bash
+npm run test:jest
+```
+
+Run the Jest security integration tests individually:
+
+```bash
+npm run test:jest -- --runInBand tests/integration/auth-bola-mass-assignment-replay.test.ts
+```
+
+These integration tests use only `employee_management_test` and cover:
+
+- Authentication failures and invalid credentials
+- Broken object-level authorization (BOLA)
+- Mass-assignment protection for restricted employee fields
+- Refresh-token rotation and replay detection
+
+They create isolated test employees and departments and clean up their own records, including refresh tokens and audit logs.
+
+Run both test suites:
+
+```bash
+npm run test:all
+```
+
+Middleware tests generate JWTs directly and do not call the login API or require PostgreSQL. Integration tests use real API routes and the isolated PostgreSQL test database.
+
+Run the TypeScript build:
+
+```bash
+npm run build
+```
+
+## API Documentation
+
+- OpenAPI specification: [openapi.yaml](openapi.yaml)
+- Postman collection: [employee-management.postman_collection.json](employee-management.postman_collection.json)
+
+Never commit `.env`, real passwords, JWT secrets, invitation tokens, or database credentials.
+
+## Project Structure
+
+```text
+src/
+	config/          Environment, database, and object-storage configuration
+	controllers/     HTTP request handlers
+	entities/        TypeORM entities
+	middlewares/     Authentication, authorization, validation, and uploads
+	migrations/      Database schema migrations
+	repositories/    Database access layer
+	routes/          API route registration
+	services/        Business logic and audit operations
+	validators/      Zod request schemas
+tests/
+	config/          Test datasource and Jest setup
+	integration/     Route-level security integration tests
+	middlewares/     Authentication and authorization middleware tests
+```
+
+## Security Notes
+
+- Use a unique JWT secret in every environment.
+- Never use development seed passwords in production.
+- Never commit `.env`, `.env.test`, database credentials, tokens, or generated files.
+- Run integration tests only against `employee_management_test`.
+- Apply migrations before starting a fresh database.

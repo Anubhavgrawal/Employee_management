@@ -1,3 +1,5 @@
+import { httpStatuses } from "../constants";
+
 export class AppError extends Error {
   constructor(
     public statusCode: number,
@@ -9,20 +11,20 @@ export class AppError extends Error {
     this.name = "AppError";
   }
   static badRequest(message: string, details?: unknown) {
-    return new AppError(400, message, "BAD_REQUEST", details);
+    return new AppError(httpStatuses.BAD_REQUEST, message, "BAD_REQUEST", details);
   }
   static unauthorized(message = "Authentication required") {
-    return new AppError(401, message, "UNAUTHORIZED");
+    return new AppError(httpStatuses.UNAUTHORIZED, message, "UNAUTHORIZED");
   }
   static forbidden(
     message = "You do not have permission to perform this action",
   ) {
-    return new AppError(403, message, "FORBIDDEN");
+    return new AppError(httpStatuses.FORBIDDEN, message, "FORBIDDEN");
   }
   static notFound(message = "Resource not found") {
-    return new AppError(404, message, "NOT_FOUND");
+    return new AppError(httpStatuses.NOT_FOUND, message, "NOT_FOUND");
   }
   static conflict(message: string) {
-    return new AppError(409, message, "CONFLICT");
+    return new AppError(httpStatuses.CONFLICT, message, "CONFLICT");
   }
 }

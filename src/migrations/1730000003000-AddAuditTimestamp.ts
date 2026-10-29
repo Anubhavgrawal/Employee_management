@@ -1,4 +1,4 @@
-import { MigrationInterface, QueryRunner } from "typeorm";
+import { type MigrationInterface, type QueryRunner } from "typeorm";
 
 export class AddAuditTimestamp1730000003000 implements MigrationInterface {
   name = "AddAuditTimestamp1730000003000";
