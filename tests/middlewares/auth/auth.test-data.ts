@@ -8,6 +8,7 @@ export const authTestUser = {
   employeeId: "employee-123",
   permissions: ["employee:read", "employee:update"],
 } satisfies AuthUser;
+export const authTestSessionId = "bdb4ee4c-9a80-43fc-9fc9-5ab754fedf14";
 
 export function createAccessToken(
   overrides: Partial<jwt.JwtPayload> = {},
@@ -16,6 +17,7 @@ export function createAccessToken(
   return jwt.sign(
     {
       type: "access",
+      sessionId: authTestSessionId,
       role: authTestUser.role,
       employeeId: authTestUser.employeeId,
       permissions: authTestUser.permissions,

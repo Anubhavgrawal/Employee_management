@@ -1,4 +1,11 @@
 import { AppDataSource } from "../../../config/database";
+import {
+  getEmployeeFromRedis,
+  getEmployeeListFromRedis,
+  invalidateEmployeeCache,
+  setEmployeeListInRedis,
+  setEmployeeInRedis,
+} from "../../../config/redis-employee";
 import { Employee } from "../entities/Employee";
 import type { EmployeeListQuery } from "../validators/employee.validator";
 export class EmployeeRepository {
@@ -7,6 +14,9 @@ export class EmployeeRepository {
     q: EmployeeListQuery,
     scope?: { managerId?: string; employeeId?: string },
   ) {
+    const cached = await getEmployeeListFromRedis(q, scope);
+    if (cached) return cached;
+
     const qb = this.repo
       .createQueryBuilder("e")
       .leftJoinAndSelect("e.department", "department");
@@ -36,19 +46,26 @@ export class EmployeeRepository {
       .skip((q.page - 1) * q.limit)
       .take(q.limit);
     const [items, total] = await qb.getManyAndCount();
-    return {
+    const result = {
       items,
       total,
       page: q.page,
       limit: q.limit,
       totalPages: Math.ceil(total / q.limit),
     };
+    await setEmployeeListInRedis(q, result, scope);
+    return result;
   }
-  findById(id: string) {
-    return this.repo.findOne({
+  async findById(id: string) {
+    const cached = await getEmployeeFromRedis(id);
+    if (cached) return cached;
+
+    const employee = await this.repo.findOne({
       where: { id },
       relations: { department: true, manager: true },
     });
+    if (employee) await setEmployeeInRedis(employee);
+    return employee;
   }
   findByWorkEmail(workEmail: string) {
     return this.repo
@@ -64,11 +81,19 @@ export class EmployeeRepository {
       .where("e.id=:id", { id })
       .getOne();
   }
-  save(employee: Employee) {
-    return this.repo.save(employee);
+  async save(employee: Employee) {
+    const saved = await this.repo.save(employee);
+    await invalidateEmployeeCache(saved.id);
+    return saved;
+  }
+  async delete(id: string) {
+    const result = await this.repo.delete(id);
+    if (result.affected) await invalidateEmployeeCache(id);
+    return result;
   }
   async deactivate(id: string) {
     await this.repo.update(id, { employmentStatus: "inactive" });
+    await invalidateEmployeeCache(id);
     return this.findById(id);
   }
 }

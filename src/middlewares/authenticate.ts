@@ -4,6 +4,10 @@ import { AppError } from "../errors/app-error";
 import { verifyAccessToken } from "../providers/jwt.provider";
 import "../interfaces/auth.interface";
 import { errorMessages } from "../constants";
+import {
+  isRedisSessionActive,
+  SessionStoreUnavailableError,
+} from "../config/redis";
 
 function tokenErrorMessage(error: unknown): string {
   if (error instanceof jwt.TokenExpiredError)
@@ -26,7 +30,7 @@ function tokenErrorMessage(error: unknown): string {
   return errorMessages.ACCESS_TOKEN_INVALID;
 }
 
-export function authenticate(req: Request, _res: Response, next: NextFunction) {
+export async function authenticate(req: Request, _res: Response, next: NextFunction) {
   const header = req.header("authorization");
   if (!header?.startsWith("Bearer "))
     return next(
@@ -34,6 +38,18 @@ export function authenticate(req: Request, _res: Response, next: NextFunction) {
     );
   try {
     const payload = verifyAccessToken(header.slice(7));
+    let active: boolean;
+    try {
+      active = await isRedisSessionActive(payload.sessionId, payload.sub);
+    } catch (error) {
+      if (error instanceof SessionStoreUnavailableError) {
+        return next(new AppError(503, "Session service is temporarily unavailable", "SESSION_STORE_UNAVAILABLE"));
+      }
+      throw error;
+    }
+    if (!active)
+      return next(AppError.unauthorized("Session is invalid, revoked, or expired"));
+
     req.auth = {
       id: payload.sub,
       role: payload.role,

@@ -5,6 +5,7 @@ import type { AccessTokenClaims } from "../interfaces/jwt.interface";
 export function signAccessToken(
   claims: {
     type: "access";
+    sessionId: string;
     role: string;
     employeeId: string;
     permissions: string[];
@@ -25,12 +26,14 @@ export function verifyAccessToken(token: string): AccessTokenClaims {
     issuer: env.JWT_ISSUER,
     audience: env.JWT_AUDIENCE,
     algorithms: ["HS256"],
+    clockTolerance: 5,
   });
 
   if (
     typeof payload !== "object" ||
     payload === null ||
     payload.type !== "access" ||
+    typeof payload.sessionId !== "string" ||
     typeof payload.sub !== "string" ||
     typeof payload.role !== "string"
   ) {

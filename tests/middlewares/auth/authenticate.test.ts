@@ -1,15 +1,24 @@
 import express from "express";
 import request from "supertest";
-import { describe, expect, it } from "@jest/globals";
+import { describe, expect, it, jest } from "@jest/globals";
 import jwt from "jsonwebtoken";
 import { env } from "../../../src/config/env";
+import { SessionStoreUnavailableError } from "../../../src/config/redis";
 import { authenticate } from "../../../src/middlewares/authenticate";
 import { errorHandler } from "../../../src/middlewares/error-handler";
 import {
   authTestUser,
+  authTestSessionId,
   createAccessToken,
   protectedPath,
 } from "./auth.test-data";
+
+const mockIsRedisSessionActive = jest.fn(async (_sessionId: string, _userId: string) => true);
+jest.mock("../../../src/config/redis", () => ({
+  ...jest.requireActual("../../../src/config/redis"),
+  isRedisSessionActive: (sessionId: string, userId: string) =>
+    mockIsRedisSessionActive(sessionId, userId),
+}));
 
 function createAuthenticationApp() {
   const app = express();
@@ -58,7 +67,7 @@ describe("authenticate middleware", () => {
   it.each([
     ["malformed JWT", "not-a-token", "Access token is malformed"],
     ["incorrectly signed JWT", jwt.sign({ type: "access", sub: authTestUser.id, role: authTestUser.role }, "wrong-secret"), "Access token signature is invalid"],
-    ["expired JWT", createAccessToken({}, { expiresIn: -1 }), "Access token has expired"],
+    ["expired JWT", createAccessToken({}, { expiresIn: -10 }), "Access token has expired"],
     ["wrong issuer", createAccessToken({}, { issuer: "wrong-issuer" }), "Access token issuer is invalid"],
     ["wrong audience", createAccessToken({}, { audience: "wrong-audience" }), "Access token audience is invalid"],
     ["wrong token type", createAccessToken({ type: "refresh" }), "Access token claims are invalid"],
@@ -112,9 +121,31 @@ describe("authenticate middleware", () => {
     });
   });
 
+  it("rejects an access token after its session is revoked", async () => {
+    mockIsRedisSessionActive.mockResolvedValueOnce(false);
+
+    const response = await request(app)
+      .get(protectedPath)
+      .set("Authorization", `Bearer ${createAccessToken()}`);
+
+    expect(response.status).toBe(401);
+    expect(response.body.message).toBe("Session is invalid, revoked, or expired");
+  });
+
+  it("returns 503 when Redis session state cannot be checked", async () => {
+    mockIsRedisSessionActive.mockRejectedValueOnce(new SessionStoreUnavailableError());
+
+    const response = await request(app)
+      .get(protectedPath)
+      .set("Authorization", `Bearer ${createAccessToken()}`);
+
+    expect(response.status).toBe(503);
+    expect(response.body.code).toBe("SESSION_STORE_UNAVAILABLE");
+  });
+
   it("defaults optional employeeId and permissions claims safely", async () => {
     const token = jwt.sign(
-      { type: "access", role: "employee" },
+      { type: "access", sessionId: authTestSessionId, role: "employee" },
       env.JWT_ACCESS_SECRET,
       {
         subject: authTestUser.id,

@@ -38,6 +38,7 @@ cp .env.example .env
 Update `.env` before starting the application:
 
 - Set `DATABASE_URL` to a working PostgreSQL connection.
+- Set `REDIS_URL` for sessions, failed-login counters, and rate limiting.
 - Replace the JWT placeholder with a random secret of at least 32 characters.
 - Set `SEED_PASSWORD` to a development password of at least 12 characters when using the seed command.
 - Keep `.env` local. It is ignored by Git.
@@ -49,6 +50,10 @@ openssl rand -hex 32
 ```
 
 Create the configured PostgreSQL database before running migrations.
+
+### Redis Setup
+
+The API uses the Redis instance at `REDIS_URL` for sessions, rate limiting, and employee/department cache-aside data. Employee detail and department detail entries expire after five minutes; employee and department lists expire after one minute. Cache failures fall back to PostgreSQL.
 
 For integration tests, create a separate database named `employee_management_test`. Test database configuration is stored in `.env.test` and is guarded so integration tests refuse to connect to any other database.
 
@@ -176,6 +181,12 @@ Passwords must be at least 12 characters and include uppercase, lowercase, and n
 - `POST /api/v1/auth/logout-all` revokes all sessions for the current user.
 - `GET /api/v1/auth/sessions` lists active sessions.
 - `DELETE /api/v1/auth/sessions/:id` revokes one session.
+
+Access JWTs are signed with HS256 and validated for signature, issuer, audience, and expiry (with a five-second clock-skew tolerance). Access-token lifetime is configured independently with `JWT_ACCESS_TTL`; refresh-token/session lifetime is configured with `REFRESH_TOKEN_TTL_DAYS`. Refresh credentials are random opaque values; only their SHA-256 hashes are stored in PostgreSQL and Redis.
+
+Each login creates a UUID session family in Redis with user ID, creation/expiry timestamps, revocation status, and device metadata. The Redis record expires at the refresh-session expiry. Access tokens include that session ID, and protected requests check that Redis still considers the session active. Logout, logout-all, password change, explicit session revocation, account deactivation, and refresh-token reuse revoke server-side session state. Reusing an already-rotated refresh token revokes its entire session family; concurrent refreshes are serialized by a conditional PostgreSQL update so only one rotation succeeds.
+
+Because protected requests require a Redis session lookup, Redis is part of the authentication availability path: when Redis is unavailable, the API returns `503 SESSION_STORE_UNAVAILABLE` rather than accepting a token whose revocation state cannot be confirmed. This adds one Redis read per authenticated request but allows logout and revocation to take effect immediately instead of waiting for access-token expiry.
 
 ## Roles and Permissions
 

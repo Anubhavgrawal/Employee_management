@@ -2,8 +2,9 @@ import "reflect-metadata";
 import dotenv from "dotenv";
 import path from "node:path";
 import argon2 from "argon2";
+import { createHash } from "node:crypto";
 import request from "supertest";
-import { afterAll, beforeAll, describe, expect, it } from "@jest/globals";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "@jest/globals";
 import { In } from "typeorm";
 import { Employee } from "../../src/api/v1/entities/Employee";
 import { Department } from "../../src/api/v1/entities/Department";
@@ -24,7 +25,14 @@ process.env.JWT_AUDIENCE =
 
 const { TestDataSource } = require("../config/database") as typeof import("../config/database");
 const { AppDataSource } = require("../../src/config/database") as typeof import("../../src/config/database");
+const {
+  connectRedis,
+  disconnectRedis,
+  redisClient,
+  revokeAllRedisSessions,
+} = require("../../src/config/redis") as typeof import("../../src/config/redis");
 const { app } = require("../../src/app") as typeof import("../../src/app");
+const { apiRateLimit } = require("../../src/middlewares/rate-limit") as typeof import("../../src/middlewares/rate-limit");
 
 const password = "IntegrationPassword123!";
 const runId = Date.now().toString();
@@ -125,6 +133,12 @@ async function createFixtures() {
 async function cleanupFixtures() {
   if (!TestDataSource.isInitialized) return;
 
+  const sessionUserIds = [firstEmployee?.id, secondEmployee?.id].filter(
+    (id): id is string => Boolean(id),
+  );
+  for (const employeeId of sessionUserIds)
+    await revokeAllRedisSessions(employeeId);
+
   const employeeRows = await TestDataSource.getRepository(Employee).find({
     where: { workEmail: In(fixtureEmails) },
     select: { id: true },
@@ -162,6 +176,8 @@ describe("Employee Management API security integration", () => {
     const appDatabaseUrl = appDatabaseOptions.url;
     assertTestDatabaseUrl(appDatabaseUrl, "AppDataSource");
     if (!AppDataSource.isInitialized) await AppDataSource.initialize();
+    await connectRedis();
+    if (!redisClient?.isReady) throw new Error("Test Redis is required for session integration tests");
     // Keep auth-rate-limit buckets isolated without changing production code.
     app.set("trust proxy", 1);
     await createFixtures();
@@ -173,7 +189,13 @@ describe("Employee Management API security integration", () => {
     } finally {
       if (AppDataSource.isInitialized) await AppDataSource.destroy();
       if (TestDataSource.isInitialized) await TestDataSource.destroy();
+      await disconnectRedis();
     }
+  });
+
+  beforeEach(async () => {
+    if (firstEmployee) await apiRateLimit.resetKey(`user:${firstEmployee.id}`);
+    if (secondEmployee) await apiRateLimit.resetKey(`user:${secondEmployee.id}`);
   });
 
   it("rejects missing authentication on a protected employee route", async () => {
@@ -250,6 +272,7 @@ describe("Employee Management API security integration", () => {
       .post("/api/v1/auth/refresh")
       .set("X-Forwarded-For", `198.51.100.${requestIpCounter++}`)
       .send({ refreshToken: originalRefreshToken });
+    expect(rotationResponse.status).toBe(200);
     const rotatedRefreshToken = rotationResponse.body.data.refreshToken as string;
 
     const replayResponse = await request(app)
@@ -270,5 +293,155 @@ describe("Employee Management API security integration", () => {
       message: "Refresh token is invalid or has already been used",
     });
     expect(familyTokenResponse.status).toBe(401);
+  });
+
+  it("allows only one concurrent refresh and revokes the family on reuse", async () => {
+    const loginResponse = await login(firstEmployee.workEmail);
+    const originalRefreshToken = loginResponse.body.data.refreshToken as string;
+    const requests = [0, 1].map(() =>
+      request(app)
+        .post("/api/v1/auth/refresh")
+        .set("X-Forwarded-For", `198.51.100.${requestIpCounter++}`)
+        .send({ refreshToken: originalRefreshToken }),
+    );
+
+    const [first, second] = await Promise.all(requests);
+    expect([first.status, second.status].sort()).toEqual([200, 401]);
+    const successful = first.status === 200 ? first : second;
+    expect(successful.body.data.refreshToken).toBeTruthy();
+
+    const protectedResponse = await request(app)
+      .get("/api/v1/employees/me")
+      .set("Authorization", `Bearer ${successful.body.data.accessToken}`);
+    expect(protectedResponse.status).toBe(401);
+  });
+
+  it("rejects an expired refresh token without treating it as replay", async () => {
+    const loginResponse = await login(secondEmployee.workEmail);
+    const refreshToken = loginResponse.body.data.refreshToken as string;
+    const tokenHash = createHash("sha256").update(refreshToken).digest("hex");
+
+    await redisClient!.del(`employee-api:session:token:${tokenHash}`);
+    await TestDataSource.getRepository("RefreshToken").update(
+      { tokenHash },
+      { expiresAt: new Date(Date.now() - 1000) },
+    );
+
+    const response = await request(app)
+      .post("/api/v1/auth/refresh")
+      .set("X-Forwarded-For", `198.51.100.${requestIpCounter++}`)
+      .send({ refreshToken });
+
+    expect(response.status).toBe(401);
+    expect(response.body.message).toBe("Invalid refresh token");
+  });
+
+  it("supports concurrent sessions and lists them independently", async () => {
+    const firstLogin = await login(firstEmployee.workEmail);
+    const secondLogin = await login(firstEmployee.workEmail);
+    const accessToken = firstLogin.body.data.accessToken as string;
+
+    const sessionsResponse = await request(app)
+      .get("/api/v1/auth/sessions")
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(firstLogin.status).toBe(200);
+    expect(secondLogin.status).toBe(200);
+    expect(firstLogin.body.data.sessionId).not.toBe(secondLogin.body.data.sessionId);
+    expect(sessionsResponse.status).toBe(200);
+    expect(sessionsResponse.body.data.map((session: { id: string }) => session.id))
+      .toEqual(expect.arrayContaining([
+        firstLogin.body.data.sessionId,
+        secondLogin.body.data.sessionId,
+      ]));
+
+    const rawRefresh = firstLogin.body.data.refreshToken as string;
+    const refreshHash = createHash("sha256").update(rawRefresh).digest("hex");
+    const cachedRefresh = await redisClient!.get(`employee-api:session:token:${refreshHash}`);
+    expect(cachedRefresh).toBeTruthy();
+    expect(cachedRefresh).not.toContain(rawRefresh);
+    expect(await redisClient!.ttl(`employee-api:session:token:${refreshHash}`)).toBeGreaterThan(0);
+  });
+
+  it("rejects the access token after logout", async () => {
+    const loginResponse = await login(firstEmployee.workEmail);
+    const { accessToken, refreshToken } = loginResponse.body.data;
+
+    const logoutResponse = await request(app)
+      .post("/api/v1/auth/logout")
+      .set("Authorization", `Bearer ${accessToken}`)
+      .send({ refreshToken });
+    const protectedResponse = await request(app)
+      .get("/api/v1/employees/me")
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(logoutResponse.status).toBe(200);
+    expect(protectedResponse.status).toBe(401);
+    expect(protectedResponse.body.message).toBe("Session is invalid, revoked, or expired");
+  });
+
+  it("revokes only an owned session and rejects its access token", async () => {
+    const firstLogin = await login(firstEmployee.workEmail);
+    const secondLogin = await login(firstEmployee.workEmail);
+    const firstSessionId = firstLogin.body.data.sessionId as string;
+
+    const revokeResponse = await request(app)
+      .delete(`/api/v1/auth/sessions/${firstSessionId}`)
+      .set("Authorization", `Bearer ${secondLogin.body.data.accessToken}`);
+    const revokedAccess = await request(app)
+      .get("/api/v1/employees/me")
+      .set("Authorization", `Bearer ${firstLogin.body.data.accessToken}`);
+    const remainingAccess = await request(app)
+      .get("/api/v1/employees/me")
+      .set("Authorization", `Bearer ${secondLogin.body.data.accessToken}`);
+
+    expect(revokeResponse.status).toBe(200);
+    expect(revokedAccess.status).toBe(401);
+    expect(remainingAccess.status).toBe(200);
+  });
+
+  it("does not allow another employee to revoke an owned session", async () => {
+    const ownerLogin = await login(firstEmployee.workEmail);
+    const otherLogin = await login(secondEmployee.workEmail);
+    const sessionId = ownerLogin.body.data.sessionId as string;
+
+    const revokeResponse = await request(app)
+      .delete(`/api/v1/auth/sessions/${sessionId}`)
+      .set("Authorization", `Bearer ${otherLogin.body.data.accessToken}`);
+    const ownerAccess = await request(app)
+      .get("/api/v1/employees/me")
+      .set("Authorization", `Bearer ${ownerLogin.body.data.accessToken}`);
+
+    expect(revokeResponse.status).toBe(404);
+    expect(ownerAccess.status).toBe(200);
+  });
+
+  it("rejects an access token after its Redis session TTL expires", async () => {
+    const loginResponse = await login(firstEmployee.workEmail);
+    const { accessToken, sessionId } = loginResponse.body.data;
+    await redisClient!.expire(`employee-api:session:${sessionId}`, 1);
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+
+    const response = await request(app)
+      .get("/api/v1/employees/me")
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(response.status).toBe(401);
+  });
+
+  it("returns 503 instead of accepting a token when Redis is unavailable", async () => {
+    const loginResponse = await login(secondEmployee.workEmail);
+    const accessToken = loginResponse.body.data.accessToken as string;
+    await redisClient!.disconnect();
+
+    try {
+      const response = await request(app)
+        .get("/api/v1/employees/me")
+        .set("Authorization", `Bearer ${accessToken}`);
+      expect(response.status).toBe(503);
+      expect(response.body.code).toBe("SESSION_STORE_UNAVAILABLE");
+    } finally {
+      await connectRedis();
+    }
   });
 });

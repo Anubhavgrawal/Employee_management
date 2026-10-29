@@ -8,6 +8,7 @@ const envSchema = z.object({
     .default("development"),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   DATABASE_URL: z.string().min(1),
+  REDIS_URL: z.string().url().optional(),
   JWT_ACCESS_SECRET: z
     .string()
     .min(32, "JWT_ACCESS_SECRET must contain at least 32 characters")

@@ -9,6 +9,7 @@ import { Role } from "../entities/Role";
 import { createHash, randomBytes } from "node:crypto";
 import type { EmployeeActor } from "../../../interfaces/actor.interface";
 import { errorMessages, roles } from "../../../constants";
+import { invalidateEmployeeCache } from "../../../config/redis-employee";
 import type { SafeEmployee } from "../../../interfaces/employee.interface";
 import type {
   CreateEmployeeInput,
@@ -125,6 +126,7 @@ export class EmployeeService {
           .execute();
       return result;
     });
+    await invalidateEmployeeCache(saved.id);
     await this.audit.record({
       actorEmployeeId: actor.id,
       action: "employee.created",
