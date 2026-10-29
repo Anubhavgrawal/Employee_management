@@ -35,6 +35,9 @@ type CachedSession = {
 const sessionKey = (hash: string) => `employee-api:session:token:${hash}`;
 const redisSessionKey = (id: string) => `employee-api:session:${id}`;
 const userSessionsKey = (id: string) => `employee-api:user-sessions:${id}`;
+export const REDIS_SESSION_KEY_PREFIX = "employee-api:session:";
+export const REDIS_REFRESH_CACHE_KEY_PREFIX = "employee-api:session:token:";
+const processedExpiryKey = (keyHash: string) => `employee-api:expiry-processed:${keyHash}`;
 const FAILED_LOGIN_LIMIT = 5;
 const FAILED_LOGIN_TTL_SECONDS = 24 * 60 * 60;
 
@@ -146,6 +149,85 @@ export async function revokeRedisSession(id: string, userId: string): Promise<bo
 export async function revokeAllRedisSessions(userId: string): Promise<void> {
   const sessions = await listRedisSessions(userId);
   await Promise.all(sessions.map(({ id }) => revokeRedisSession(id, userId)));
+}
+
+export async function markExpiryEventProcessed(keyHash: string): Promise<boolean | null> {
+  if (!redisClient?.isReady) return null;
+  try {
+    const result = await redisClient.set(processedExpiryKey(keyHash), "1", {
+      NX: true,
+      EX: 24 * 60 * 60,
+    });
+    return result === "OK";
+  } catch (error) {
+    logRedisOperationError("record expiry event", error);
+    return null;
+  }
+}
+
+export async function clearExpiryEventMarker(keyHash: string): Promise<void> {
+  if (!redisClient?.isReady) return;
+  try {
+    await redisClient.del(processedExpiryKey(keyHash));
+  } catch (error) {
+    logRedisOperationError("clear expiry event marker", error);
+  }
+}
+
+export async function removeRedisSessionMetadata(sessionId: string, userId: string): Promise<void> {
+  if (!redisClient?.isReady) return;
+  try {
+    await Promise.all([
+      redisClient.del(redisSessionKey(sessionId)),
+      redisClient.sRem(userSessionsKey(userId), sessionId),
+    ]);
+  } catch (error) {
+    logRedisOperationError("remove expired session metadata", error);
+  }
+}
+
+export async function listRedisSessionKeys(): Promise<string[]> {
+  if (!redisClient?.isReady) throw new SessionStoreUnavailableError();
+  try {
+    const keys: string[] = [];
+    let cursor = "0";
+    do {
+      const result = await redisClient.scan(cursor, {
+        MATCH: `${REDIS_SESSION_KEY_PREFIX}*`,
+        COUNT: 200,
+      });
+      cursor = result.cursor;
+      keys.push(...result.keys);
+    } while (cursor !== "0");
+    return keys;
+  } catch (error) {
+    logRedisOperationError("scan session metadata", error);
+    throw new SessionStoreUnavailableError();
+  }
+}
+
+export async function cleanupRedisSessionMetadata(
+  sessionId: string,
+  userId: string,
+): Promise<void> {
+  await removeRedisSessionMetadata(sessionId, userId);
+}
+
+export async function configureExpiryNotifications(): Promise<void> {
+  if (!redisClient?.isReady) throw new SessionStoreUnavailableError();
+  try {
+    const config = await redisClient.sendCommand(["CONFIG", "GET", "notify-keyspace-events"]);
+    const current = Array.isArray(config) ? String(config[1] ?? "") : "";
+    const flags = new Set(current.split(""));
+    flags.add("E");
+    flags.add("x");
+    const required = [...flags].join("");
+    if (required !== current) {
+      await redisClient.sendCommand(["CONFIG", "SET", "notify-keyspace-events", required]);
+    }
+  } catch (error) {
+    logRedisOperationError("enable key-expiry notifications; configure notify-keyspace-events Ex", error);
+  }
 }
 
 function logRedisOperationError(action: string, error: unknown) {

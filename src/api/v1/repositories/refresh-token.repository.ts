@@ -1,7 +1,8 @@
 import { AppDataSource } from "../../../config/database";
 import { RefreshToken } from "../entities/RefreshToken";
-import { IsNull } from "typeorm";
+import { IsNull, LessThanOrEqual, MoreThan } from "typeorm";
 import {
+  cleanupRedisSessionMetadata,
   deleteSessionFromRedis,
   getSessionFromRedis,
   revokeAllRedisSessions,
@@ -94,5 +95,63 @@ export class RefreshTokenRepository {
       .execute();
     await Promise.all(sessions.map(({ tokenHash }) => deleteSessionFromRedis(tokenHash)));
     return result;
+  }
+
+  async expireRefreshTokenByHash(tokenHash: string, now = new Date()): Promise<"removed" | "missing" | "not-expired"> {
+    const token = await this.repo.findOne({
+      where: { tokenHash },
+      select: { id: true, expiresAt: true },
+    });
+    if (!token) return "missing";
+    if (token.expiresAt > now) return "not-expired";
+
+    await this.repo.delete(token.id);
+    await deleteSessionFromRedis(tokenHash);
+    return "removed";
+  }
+
+  async expireSessionFamily(familyId: string, now = new Date()): Promise<number> {
+    const tokens = await this.repo.find({
+      where: { familyId },
+      select: { id: true, tokenHash: true, employeeId: true },
+    });
+    if (!tokens.length) return 0;
+
+    const result = await this.repo
+      .createQueryBuilder()
+      .update()
+      .set({ revokedAt: now })
+      .where("family_id=:familyId AND revoked_at IS NULL", { familyId })
+      .execute();
+    await Promise.all(tokens.map(({ tokenHash }) => deleteSessionFromRedis(tokenHash)));
+    await cleanupRedisSessionMetadata(familyId, tokens[0].employeeId);
+    return result.affected ?? 0;
+  }
+
+  async reconcileExpired(now = new Date()): Promise<number> {
+    const expiredTokens = await this.repo.find({
+      where: { expiresAt: LessThanOrEqual(now) },
+      select: { id: true, tokenHash: true, familyId: true, employeeId: true },
+    });
+    if (!expiredTokens.length) return 0;
+
+    await this.repo.delete(expiredTokens.map(({ id }) => id));
+    await Promise.all(expiredTokens.map(({ tokenHash }) => deleteSessionFromRedis(tokenHash)));
+
+    const affectedFamilies = new Map<string, string>();
+    for (const token of expiredTokens) affectedFamilies.set(token.familyId, token.employeeId);
+    for (const [familyId, employeeId] of affectedFamilies) {
+      const activeToken = await this.repo.findOne({
+        where: {
+          familyId,
+          employeeId,
+          revokedAt: IsNull(),
+          expiresAt: MoreThan(now),
+        },
+        select: { id: true },
+      });
+      if (!activeToken) await cleanupRedisSessionMetadata(familyId, employeeId);
+    }
+    return expiredTokens.length;
   }
 }

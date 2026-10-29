@@ -1,3 +1,11 @@
+
+Session cleanup subscribes to Redis key-expiry events and also reconciles expired records every 15 minutes. Key expiry notifications must include keyevent and expired events (`Ex`). On Redis servers where the app user cannot run `CONFIG SET`, configure this in `redis.conf` and restart Redis:
+
+```conf
+notify-keyspace-events Ex
+```
+
+At startup the API attempts to add `E` and `x` to the current setting while preserving existing notification flags. Pub/Sub expiry events are best-effort cleanup signals, not an authentication control: every protected request independently validates the signed JWT and checks active session metadata in Redis. If that Redis check is unavailable, the API fails closed with `503 SESSION_STORE_UNAVAILABLE`; this provides immediate revocation at the cost of Redis availability being required for authenticated requests. The reconciliation job repairs missed events and removes expired database refresh-token rows and stale session metadata.
 # Employee Management API
 
 Secure TypeScript and Express REST API for employee records, role-based access control, authentication, departments, audit logs, and employee document storage.

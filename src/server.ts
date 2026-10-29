@@ -4,14 +4,18 @@ import { env } from "./config/env";
 import { connectRedis, disconnectRedis } from "./config/redis";
 import { startManagerCheckCron } from "./cron/manager-check.cron";
 import { startMissingPhoneCron } from "./cron/missing-phone.cron";
+import { startRedisExpirySubscriber } from "./config/redis-expiry-subscriber";
+import { startTokenExpiryReconciliationCron } from "./cron/token-expiry-reconciliation.cron";
 async function start() {
   let startupStep = "database";
   try {
     await AppDataSource.initialize();
     startupStep = "Redis";
     await connectRedis();
+      const expirySubscription = await startRedisExpirySubscriber();
     const managerCheckCron = startManagerCheckCron();
     const missingPhoneCron = startMissingPhoneCron();
+      const tokenExpiryReconciliationCron = startTokenExpiryReconciliationCron();
     startupStep = "API";
     const { app } = await import("./app.js");
     const server = app.listen(env.PORT, () =>
@@ -23,6 +27,8 @@ async function start() {
         try {
           managerCheckCron.stop();
           missingPhoneCron.stop();
+            tokenExpiryReconciliationCron.stop();
+            await expirySubscription?.stop();
           if (AppDataSource.isInitialized) await AppDataSource.destroy();
           await disconnectRedis();
           process.exit(0);
