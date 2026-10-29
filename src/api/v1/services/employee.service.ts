@@ -10,6 +10,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { EmployeeActor } from "../../../interfaces/actor.interface";
 import { errorMessages, roles } from "../../../constants";
 import { invalidateEmployeeCache } from "../../../config/redis-employee";
+import { SessionAuditService } from "./session-audit.service";
 import type { SafeEmployee } from "../../../interfaces/employee.interface";
 import type {
   CreateEmployeeInput,
@@ -26,6 +27,7 @@ export class EmployeeService {
   private departments = new DepartmentRepository();
   private tokens = new RefreshTokenRepository();
   private audit = new AuditService();
+  private sessionAudit = new SessionAuditService();
   async list(
     q: EmployeeListQuery,
     actor: EmployeeActor,
@@ -211,10 +213,18 @@ export class EmployeeService {
   async deactivate(id: string, actorId: string, requestId?: string) {
     const e = await this.employees.findById(id);
     if (!e) throw AppError.notFound("Employee not found");
+    const sessions = await this.tokens.activeForUser(id);
     e.employmentStatus = "inactive";
     e.isActive = false;
     await this.employees.save(e);
     await this.tokens.revokeAll(id);
+    for (const sessionId of new Set(sessions.map(({ familyId }) => familyId))) {
+      await this.sessionAudit.recordLifecycle({
+        userId: id,
+        sessionId,
+        eventType: "session_revoked",
+      });
+    }
     await this.audit.record({
       actorEmployeeId: actorId,
       action: "employee.deactivated",

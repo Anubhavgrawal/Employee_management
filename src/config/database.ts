@@ -9,6 +9,7 @@ import { RefreshToken } from "../api/v1/entities/RefreshToken";
 import { AuditLog } from "../api/v1/entities/AuditLog";
 import { EmployeeDocument } from "../api/v1/entities/EmployeeDocument";
 import { ActivityLog } from "../api/v1/entities/ActivityLog";
+import { SessionAuditEvent } from "../api/v1/entities/SessionAuditEvent";
 
 // synchronize is deliberately disabled: migrations are the source of schema changes.
 export const AppDataSource = new DataSource({
@@ -23,6 +24,7 @@ export const AppDataSource = new DataSource({
     AuditLog,
     EmployeeDocument,
     ActivityLog,
+    SessionAuditEvent,
   ],
   migrations: ["src/migrations/*.ts"],
   synchronize: false,

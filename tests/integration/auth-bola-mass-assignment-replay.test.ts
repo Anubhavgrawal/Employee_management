@@ -9,6 +9,8 @@ import { In } from "typeorm";
 import { Employee } from "../../src/api/v1/entities/Employee";
 import { Department } from "../../src/api/v1/entities/Department";
 import { Role } from "../../src/api/v1/entities/Role";
+import { SessionAuditEvent } from "../../src/api/v1/entities/SessionAuditEvent";
+import { SessionAuditService, sessionAuditCorrelationId } from "../../src/api/v1/services/session-audit.service";
 
 // Load the guarded test environment before importing the application datasource.
 dotenv.config({
@@ -42,11 +44,14 @@ let requestIpCounter = 1;
 
 let departmentId: string;
 let employeeRole: Role;
+let adminRole: Role;
 let firstEmployee: Employee;
 let secondEmployee: Employee;
+let adminEmployee: Employee;
 let createdRoleDuringTest = false;
+let createdAdminRoleDuringTest = false;
 
-const fixtureEmails = [employeeEmail("one"), employeeEmail("two")];
+const fixtureEmails = [employeeEmail("one"), employeeEmail("two"), employeeEmail("admin")];
 
 function assertTestDatabaseUrl(databaseUrl: unknown, source: string) {
   if (typeof databaseUrl !== "string" || !databaseUrl) {
@@ -128,12 +133,39 @@ async function createFixtures() {
     ]),
   );
   [firstEmployee, secondEmployee] = employees;
+
+  adminRole = await roleRepository.findOneBy({ name: "admin" }) as Role;
+  if (!adminRole) {
+    adminRole = await roleRepository.save(
+      roleRepository.create({ name: "admin", description: "Session metrics test role", permissions: [] }),
+    );
+    createdAdminRoleDuringTest = true;
+  }
+  adminEmployee = await employeeRepository.save(
+    employeeRepository.create({
+      firstName: "Integration",
+      lastName: "Admin",
+      workEmail: fixtureEmails[2],
+      passwordHash,
+      roleId: adminRole.id,
+      isActive: true,
+      departmentId,
+      jobTitle: "Integration Administrator",
+      joiningDate: "2026-10-23",
+      employmentStatus: "active",
+      phone: null,
+      managerId: null,
+      salary: null,
+      invitationTokenHash: null,
+      invitationExpiresAt: null,
+    }),
+  );
 }
 
 async function cleanupFixtures() {
   if (!TestDataSource.isInitialized) return;
 
-  const sessionUserIds = [firstEmployee?.id, secondEmployee?.id].filter(
+  const sessionUserIds = [firstEmployee?.id, secondEmployee?.id, adminEmployee?.id].filter(
     (id): id is string => Boolean(id),
   );
   for (const employeeId of sessionUserIds)
@@ -161,6 +193,9 @@ async function cleanupFixtures() {
   }
   if (createdRoleDuringTest && employeeRole?.id) {
     await TestDataSource.getRepository(Role).delete({ id: employeeRole.id });
+  }
+  if (createdAdminRoleDuringTest && adminRole?.id) {
+    await TestDataSource.getRepository(Role).delete({ id: adminRole.id });
   }
 }
 
@@ -398,6 +433,15 @@ describe("Employee Management API security integration", () => {
     expect(revokeResponse.status).toBe(200);
     expect(revokedAccess.status).toBe(401);
     expect(remainingAccess.status).toBe(200);
+
+    const revokeAudit = await TestDataSource.getRepository(SessionAuditEvent).findOne({
+      where: {
+        userId: firstEmployee.id,
+        sessionId: firstSessionId,
+        eventType: "session_revoked",
+      },
+    });
+    expect(revokeAudit?.processingStatus).toBe("processed");
   });
 
   it("does not allow another employee to revoke an owned session", async () => {
@@ -443,5 +487,119 @@ describe("Employee Management API security integration", () => {
     } finally {
       await connectRedis();
     }
+  });
+
+  it("records session creation and logout and returns only the caller's history", async () => {
+    const firstLogin = await login(firstEmployee.workEmail);
+    const secondLogin = await login(secondEmployee.workEmail);
+    const sessionId = firstLogin.body.data.sessionId as string;
+
+    const logout = await request(app)
+      .post("/api/v1/auth/logout")
+      .set("Authorization", `Bearer ${firstLogin.body.data.accessToken}`)
+      .send({ refreshToken: firstLogin.body.data.refreshToken });
+    expect(logout.status).toBe(200);
+
+    const history = await request(app)
+      .get("/api/v1/auth/sessions/history")
+      .set("Authorization", `Bearer ${secondLogin.body.data.accessToken}`);
+    expect(history.status).toBe(200);
+    expect(history.body.data.length).toBeGreaterThan(0);
+    expect(history.body.data.every((event: SessionAuditEvent) => event.userId === secondEmployee.id)).toBe(true);
+
+    const firstEvents = await TestDataSource.getRepository(SessionAuditEvent).find({
+      where: { userId: firstEmployee.id, sessionId },
+    });
+    expect(firstEvents.map(({ eventType }) => eventType)).toEqual(
+      expect.arrayContaining(["session_created", "logout"]),
+    );
+
+    const otherHistory = await request(app)
+      .get("/api/v1/auth/sessions/history")
+      .set("Authorization", `Bearer ${(await login(secondEmployee.workEmail)).body.data.accessToken}`);
+    expect(otherHistory.body.data.every((event: { userId: string }) => event.userId === secondEmployee.id)).toBe(true);
+  });
+
+  it("deduplicates lifecycle audit events by session and event type", async () => {
+    const sessionId = "50fda269-8e51-4e8d-a48a-f55c94635922";
+    const auditService = new SessionAuditService();
+    await auditService.recordLifecycle({
+      userId: firstEmployee.id,
+      sessionId,
+      eventType: "session_revoked",
+      correlationId: sessionAuditCorrelationId("session_revoked", sessionId),
+    });
+    await auditService.recordLifecycle({
+      userId: firstEmployee.id,
+      sessionId,
+      eventType: "session_revoked",
+      correlationId: sessionAuditCorrelationId("session_revoked", sessionId),
+    });
+
+    const count = await TestDataSource.getRepository(SessionAuditEvent).count({
+      where: {
+        userId: firstEmployee.id,
+        sessionId,
+        correlationId: sessionAuditCorrelationId("session_revoked", sessionId),
+      },
+    });
+    expect(count).toBe(1);
+  });
+
+  it("restricts daily session metrics to administrators", async () => {
+    const employeeLogin = await login(firstEmployee.workEmail);
+    const denied = await request(app)
+      .get("/api/v1/admin/session-metrics")
+      .set("Authorization", `Bearer ${employeeLogin.body.data.accessToken}`);
+    const adminLogin = await login(adminEmployee.workEmail);
+    const allowed = await request(app)
+      .get("/api/v1/admin/session-metrics")
+      .set("Authorization", `Bearer ${adminLogin.body.data.accessToken}`);
+
+    expect(denied.status).toBe(403);
+    expect(allowed.status).toBe(200);
+    expect(allowed.body.data).toEqual(expect.objectContaining({
+      date: expect.any(String),
+      expiredSessions: expect.any(Number),
+      manualRevocations: expect.any(Number),
+      refreshTokenReuseDetections: expect.any(Number),
+    }));
+  });
+
+  it("does not expose another employee's session history", async () => {
+    const ownerLogin = await login(firstEmployee.workEmail);
+    const otherLogin = await login(secondEmployee.workEmail);
+    await request(app)
+      .post("/api/v1/auth/logout")
+      .set("Authorization", `Bearer ${ownerLogin.body.data.accessToken}`)
+      .send({ refreshToken: ownerLogin.body.data.refreshToken });
+
+    const otherHistory = await request(app)
+      .get("/api/v1/auth/sessions/history")
+      .set("Authorization", `Bearer ${otherLogin.body.data.accessToken}`);
+
+    expect(otherHistory.status).toBe(200);
+    expect(otherHistory.body.data.every((event: { userId: string }) => event.userId === secondEmployee.id)).toBe(true);
+  });
+
+  it("records refresh-token reuse detection in the session audit ledger", async () => {
+    const loginResponse = await login(firstEmployee.workEmail);
+    const refreshToken = loginResponse.body.data.refreshToken as string;
+    await request(app)
+      .post("/api/v1/auth/refresh")
+      .set("X-Forwarded-For", `198.51.100.${requestIpCounter++}`)
+      .send({ refreshToken });
+
+    await request(app)
+      .post("/api/v1/auth/refresh")
+      .set("X-Forwarded-For", `198.51.100.${requestIpCounter++}`)
+      .send({ refreshToken });
+
+    const events = await TestDataSource.getRepository(SessionAuditEvent).find({
+      where: { userId: firstEmployee.id, eventType: "refresh_token_reuse" },
+    });
+    expect(events.length).toBeGreaterThan(0);
+    expect(events[0].processingStatus).toBe("processed");
+    expect(events[0].correlationId).toBeTruthy();
   });
 });

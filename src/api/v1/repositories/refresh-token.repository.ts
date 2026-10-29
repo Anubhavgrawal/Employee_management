@@ -110,6 +110,37 @@ export class RefreshTokenRepository {
     return "removed";
   }
 
+  async findFamilyOwner(familyId: string): Promise<string | null> {
+    const token = await this.repo.findOne({
+      where: { familyId },
+      select: { employeeId: true },
+    });
+    return token?.employeeId ?? null;
+  }
+
+  activeForFamily(familyId: string, now = new Date()): Promise<number> {
+    return this.repo.count({
+      where: { familyId, revokedAt: IsNull(), expiresAt: MoreThan(now) },
+    });
+  }
+
+  async expiredFamilies(now = new Date()): Promise<Array<{ familyId: string; userId: string }>> {
+    const tokens = await this.repo.find({
+      where: { expiresAt: LessThanOrEqual(now) },
+      select: { familyId: true, employeeId: true },
+    });
+    const activeFamilies = await this.repo.find({
+      select: { familyId: true, employeeId: true },
+      where: { revokedAt: IsNull(), expiresAt: MoreThan(now) },
+    });
+    const active = new Set(activeFamilies.map(({ familyId }) => familyId));
+    const families = new Map<string, string>();
+    for (const token of tokens) {
+      if (!active.has(token.familyId)) families.set(token.familyId, token.employeeId);
+    }
+    return [...families].map(([familyId, userId]) => ({ familyId, userId }));
+  }
+
   async expireSessionFamily(familyId: string, now = new Date()): Promise<number> {
     const tokens = await this.repo.find({
       where: { familyId },

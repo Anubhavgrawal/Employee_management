@@ -4,6 +4,10 @@ import {
   markExpiryEventProcessed,
 } from "../../../config/redis";
 import { RefreshTokenRepository } from "../repositories/refresh-token.repository";
+import {
+  SessionAuditService,
+  sessionAuditCorrelationId,
+} from "./session-audit.service";
 
 const SESSION_PREFIX = "employee-api:session:";
 const REFRESH_TOKEN_PREFIX = "employee-api:session:token:";
@@ -15,6 +19,7 @@ export class TokenExpiryEventService {
   constructor(
     private readonly tokens = new RefreshTokenRepository(),
     private readonly logger: ExpiryLogger = console,
+    private readonly audit = new SessionAuditService(),
   ) {}
 
   async processExpiredKey(key: string, eventTime = new Date()): Promise<ExpiryEventOutcome> {
@@ -32,13 +37,38 @@ export class TokenExpiryEventService {
     }
 
     try {
-      const outcome = event.type === "session"
-        ? (await this.tokens.expireSessionFamily(event.identifier, eventTime)) > 0
-          ? "processed"
-          : "duplicate"
-        : await this.tokens.expireRefreshTokenByHash(event.identifier, eventTime) === "removed"
+      let outcome: "processed" | "duplicate";
+      if (event.type === "session") {
+        const userId = await this.tokens.findFamilyOwner(event.identifier);
+        const expiredCount = await this.tokens.expireSessionFamily(event.identifier, eventTime);
+        outcome = expiredCount > 0 ? "processed" : "duplicate";
+        if (userId && outcome === "processed") {
+          await this.audit.recordLifecycle({
+            userId,
+            sessionId: event.identifier,
+            eventType: "session_expired",
+            occurredAt: eventTime,
+            correlationId: sessionAuditCorrelationId("session_expired", event.identifier),
+          });
+        }
+      } else {
+        const token = await this.tokens.findByHash(event.identifier);
+        outcome = await this.tokens.expireRefreshTokenByHash(event.identifier, eventTime) === "removed"
           ? "processed"
           : "duplicate";
+        if (token && outcome === "processed") {
+          const familyStillActive = (await this.tokens.activeForFamily(token.familyId, eventTime)) > 0;
+          if (!familyStillActive) {
+            await this.audit.recordLifecycle({
+              userId: token.employeeId,
+              sessionId: token.familyId,
+              eventType: "session_expired",
+              occurredAt: eventTime,
+              correlationId: sessionAuditCorrelationId("session_expired", token.familyId),
+            });
+          }
+        }
+      }
       this.log(outcome, event.type, this.safeIdentifier(event), eventTime);
       return outcome;
     } catch (error) {

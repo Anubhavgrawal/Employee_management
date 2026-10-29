@@ -3,6 +3,7 @@ import multer from "multer";
 import { AppError } from "../errors/app-error";
 import { errorMessages, httpStatuses } from "../constants";
 import { SessionStoreUnavailableError } from "../config/redis";
+import { SessionAuditUnavailableError } from "../api/v1/services/session-audit.service";
 export function notFound(req: Request, res: Response, next: NextFunction) {
   next(AppError.notFound(`Route ${req.method} ${req.path} not found`));
 }
@@ -21,6 +22,12 @@ export function errorHandler(
             httpStatuses.SERVICE_UNAVAILABLE,
             "Session service is temporarily unavailable",
             "SESSION_STORE_UNAVAILABLE",
+          )
+      : err instanceof SessionAuditUnavailableError
+        ? new AppError(
+            httpStatuses.SERVICE_UNAVAILABLE,
+            "Session audit service is temporarily unavailable",
+            "SESSION_AUDIT_UNAVAILABLE",
           )
       : new AppError(
           httpStatuses.INTERNAL_SERVER_ERROR,

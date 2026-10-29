@@ -21,6 +21,7 @@ router.post("/refresh", validateBody(refreshSchema), controller.refresh);
 router.post("/logout", authenticate, validateBody(refreshSchema), controller.logout);
 router.post("/logout-all", authenticate, controller.logoutAll);
 router.get("/sessions", authenticate, controller.sessions);
+router.get("/sessions/history", authenticate, controller.sessionHistory);
 router.delete("/sessions/:id", authenticate, controller.revokeSession);
 router.post(
   "/change-password",

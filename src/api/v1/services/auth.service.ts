@@ -11,6 +11,10 @@ import { AuditService } from "./audit.service";
 import { signAccessToken } from "../../../providers/jwt.provider";
 import { errorMessages } from "../../../constants";
 import {
+  SessionAuditService,
+  sessionAuditCorrelationId,
+} from "./session-audit.service";
+import {
   clearFailedLoginAttempts,
   getFailedLoginAttempts,
   getRedisSession,
@@ -31,6 +35,7 @@ export class AuthService {
   private users = new UserRepository();
   private tokens = new RefreshTokenRepository();
   private audit = new AuditService();
+  private sessionAudit = new SessionAuditService();
   private accessToken(user: Employee, sessionId: string) {
     return signAccessToken(
       {
@@ -72,8 +77,14 @@ export class AuthService {
     });
     try {
       await this.tokens.save(entity);
+      await this.sessionAudit.recordLifecycle({
+        userId: user.id,
+        sessionId: familyId,
+        eventType: "session_created",
+      });
     } catch (error) {
       await revokeRedisSession(familyId, user.id).catch(() => false);
+      await this.tokens.revokeFamily(familyId).catch(() => undefined);
       throw error;
     }
     return { refreshToken: token, sessionId: familyId };
@@ -148,11 +159,25 @@ export class AuthService {
     const old = await this.tokens.findByHash(hashToken(raw));
     if (!old) throw AppError.unauthorized(errorMessages.INVALID_REFRESH_TOKEN);
     if (old.expiresAt.getTime() <= Date.now()) {
+      if ((await this.tokens.activeForFamily(old.familyId)) === 0) {
+        await revokeRedisSession(old.familyId, old.employeeId);
+        await this.sessionAudit.recordLifecycle({
+          userId: old.employeeId,
+          sessionId: old.familyId,
+          eventType: "session_expired",
+          correlationId: sessionAuditCorrelationId("session_expired", old.familyId),
+        });
+      }
       throw AppError.unauthorized(errorMessages.INVALID_REFRESH_TOKEN);
     }
     if (old.revokedAt) {
       // Reuse of a rotated token revokes the whole token family.
       await this.tokens.revokeFamily(old.familyId);
+      await this.sessionAudit.recordLifecycle({
+        userId: old.employeeId,
+        sessionId: old.familyId,
+        eventType: "refresh_token_reuse",
+      });
       throw AppError.unauthorized(
         errorMessages.REFRESH_TOKEN_REPLAY,
       );
@@ -165,7 +190,9 @@ export class AuthService {
     )
       throw AppError.unauthorized("Session is invalid, revoked, or expired");
     if (!old.employee.isActive) {
+      const activeSessions = await this.tokens.activeForUser(old.employeeId);
       await this.tokens.revokeAll(old.employeeId);
+      await this.recordRevokedSessions(old.employeeId, activeSessions.map(({ familyId }) => familyId));
       throw AppError.unauthorized(errorMessages.ACCOUNT_INACTIVE);
     }
     let result;
@@ -223,6 +250,11 @@ export class AuthService {
       if (old.expiresAt <= new Date())
         throw AppError.unauthorized(errorMessages.INVALID_REFRESH_TOKEN);
       await this.tokens.revokeFamily(old.familyId);
+      await this.sessionAudit.recordLifecycle({
+        userId: old.employeeId,
+        sessionId: old.familyId,
+        eventType: "refresh_token_reuse",
+      });
       throw AppError.unauthorized(errorMessages.REFRESH_TOKEN_REPLAY);
     }
     await Promise.all([
@@ -241,11 +273,18 @@ export class AuthService {
     const token = await this.tokens.findByHash(hashToken(raw));
     if (token) {
       await this.tokens.revokeFamily(token.familyId);
+      await this.sessionAudit.recordLifecycle({
+        userId: token.employeeId,
+        sessionId: token.familyId,
+        eventType: "logout",
+      });
     }
     return { loggedOut: true };
   }
   async logoutAll(userId: string) {
+    const sessions = await this.tokens.activeForUser(userId);
     await this.tokens.revokeAll(userId);
+    await this.recordRevokedSessions(userId, sessions.map(({ familyId }) => familyId));
     await this.audit.record({
       actorEmployeeId: userId,
       action: "auth.logout_all",
@@ -263,11 +302,31 @@ export class AuthService {
       revokedAt: session.revokedAt ? new Date(session.revokedAt) : null,
     }));
   }
+  sessionHistory(userId: string, limit = 100) {
+    return this.sessionAudit.historyForUser(userId, Number.isNaN(limit) ? 100 : limit);
+  }
   async revokeSession(userId: string, id: string) {
     if (!(await revokeRedisSession(id, userId)))
       throw AppError.notFound("Session not found");
-    await this.tokens.revokeSession(id, userId);
+    const result = await this.tokens.revokeSession(id, userId);
+    if (result.affected) {
+      await this.sessionAudit.recordLifecycle({
+        userId,
+        sessionId: id,
+        eventType: "session_revoked",
+      });
+    }
     return { revoked: true };
+  }
+
+  private async recordRevokedSessions(userId: string, sessionIds: string[]) {
+    for (const sessionId of new Set(sessionIds)) {
+      await this.sessionAudit.recordLifecycle({
+        userId,
+        sessionId,
+        eventType: "session_revoked",
+      });
+    }
   }
   async changePassword(
     userId: string,
@@ -291,7 +350,9 @@ export class AuthService {
       type: argon2.argon2id,
     });
     await this.users.save(user);
+    const sessions = await this.tokens.activeForUser(userId);
     await this.tokens.revokeAll(userId);
+    await this.recordRevokedSessions(userId, sessions.map(({ familyId }) => familyId));
     await this.audit.record({
           actorEmployeeId: userId,
       action: "auth.password_changed",

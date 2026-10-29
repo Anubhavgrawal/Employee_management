@@ -188,13 +188,17 @@ Passwords must be at least 12 characters and include uppercase, lowercase, and n
 - `POST /api/v1/auth/logout` revokes the supplied session token.
 - `POST /api/v1/auth/logout-all` revokes all sessions for the current user.
 - `GET /api/v1/auth/sessions` lists active sessions.
+- `GET /api/v1/auth/sessions/history` lists recent audit events for the signed-in user.
 - `DELETE /api/v1/auth/sessions/:id` revokes one session.
+- `GET /api/v1/admin/session-metrics` returns today's UTC session expiry, revocation/logout, and refresh-token reuse counts (admin only).
 
 Access JWTs are signed with HS256 and validated for signature, issuer, audience, and expiry (with a five-second clock-skew tolerance). Access-token lifetime is configured independently with `JWT_ACCESS_TTL`; refresh-token/session lifetime is configured with `REFRESH_TOKEN_TTL_DAYS`. Refresh credentials are random opaque values; only their SHA-256 hashes are stored in PostgreSQL and Redis.
 
 Each login creates a UUID session family in Redis with user ID, creation/expiry timestamps, revocation status, and device metadata. The Redis record expires at the refresh-session expiry. Access tokens include that session ID, and protected requests check that Redis still considers the session active. Logout, logout-all, password change, explicit session revocation, account deactivation, and refresh-token reuse revoke server-side session state. Reusing an already-rotated refresh token revokes its entire session family; concurrent refreshes are serialized by a conditional PostgreSQL update so only one rotation succeeds.
 
 Because protected requests require a Redis session lookup, Redis is part of the authentication availability path: when Redis is unavailable, the API returns `503 SESSION_STORE_UNAVAILABLE` rather than accepting a token whose revocation state cannot be confirmed. This adds one Redis read per authenticated request but allows logout and revocation to take effect immediately instead of waiting for access-token expiry.
+
+Session lifecycle events are stored durably in PostgreSQL `session_audit_events`, with a unique correlation ID, event timestamp, and processing status. Repeated lifecycle/expiry notifications are idempotent. Audit writes retry transient database failures and return `503 SESSION_AUDIT_UNAVAILABLE` after bounded retries rather than silently dropping an event. User history is restricted to the authenticated user; aggregate session metrics require the admin role.
 
 ## Roles and Permissions
 

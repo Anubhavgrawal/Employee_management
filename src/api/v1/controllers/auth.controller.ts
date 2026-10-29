@@ -56,6 +56,16 @@ export class AuthController {
       "Sessions fetched",
       await this.service.sessions(req.auth!.id),
     );
+  sessionHistory = async (req: Request, res: Response) =>
+    ApiResponse.send(
+      res,
+      200,
+      "Session history fetched",
+      await this.service.sessionHistory(
+        req.auth!.id,
+        Number.parseInt(String(req.query.limit ?? "100"), 10),
+      ),
+    );
   revokeSession = async (req: Request, res: Response) =>
     ApiResponse.send(
       res,

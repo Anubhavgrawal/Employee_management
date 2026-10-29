@@ -4,12 +4,29 @@ import {
   listRedisSessionKeys,
 } from "../../../config/redis";
 import { RefreshTokenRepository } from "../repositories/refresh-token.repository";
+import {
+  SessionAuditService,
+  sessionAuditCorrelationId,
+} from "./session-audit.service";
 
 export class TokenExpiryReconciliationService {
-  constructor(private readonly tokens = new RefreshTokenRepository()) {}
+  constructor(
+    private readonly tokens = new RefreshTokenRepository(),
+    private readonly audit = new SessionAuditService(),
+  ) {}
 
   async reconcile(now = new Date()): Promise<number> {
+    const expiredFamilies = await this.tokens.expiredFamilies(now);
     const removedTokens = await this.tokens.reconcileExpired(now);
+    for (const { familyId, userId } of expiredFamilies) {
+      await this.audit.recordLifecycle({
+        userId,
+        sessionId: familyId,
+        eventType: "session_expired",
+        occurredAt: now,
+        correlationId: sessionAuditCorrelationId("session_expired", familyId),
+      });
+    }
     const keys = await listRedisSessionKeys();
     let removedSessions = 0;
 

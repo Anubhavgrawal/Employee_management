@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   recordAttempt: vi.fn(async () => ++mocks.attempts),
   clearAttempts: vi.fn(async () => { mocks.attempts = 0; }),
   saveSession: vi.fn(async () => undefined),
+  revokeSession: vi.fn(async () => true),
+  recordSessionAudit: vi.fn(async () => undefined),
   findByEmail: vi.fn(async () => mocks.user),
   saveToken: vi.fn(async (token: object) => token),
   audit: vi.fn(async () => undefined),
@@ -17,6 +19,7 @@ vi.mock("../src/config/redis", () => ({
   recordFailedLoginAttempt: mocks.recordAttempt,
   clearFailedLoginAttempts: mocks.clearAttempts,
   saveRedisSession: mocks.saveSession,
+  revokeRedisSession: mocks.revokeSession,
 }));
 vi.mock("../src/api/v1/repositories/user.repository", () => ({
   UserRepository: class { findByEmail = mocks.findByEmail; },
@@ -36,6 +39,9 @@ vi.mock("../src/services/audit.service", () => ({
 }));
 vi.mock("../src/api/v1/services/audit.service", () => ({
   AuditService: class { record = mocks.audit; },
+}));
+vi.mock("../src/api/v1/services/session-audit.service", () => ({
+  SessionAuditService: class { recordLifecycle = mocks.recordSessionAudit; },
 }));
 vi.mock("../src/config/database", () => ({
   AppDataSource: {
